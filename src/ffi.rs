@@ -15,10 +15,26 @@ mod ffi_bridge {
 	struct TopologyData {
 		face_tshape_ids: Vec<u64>,
 		edge_tshape_ids: Vec<u64>,
+		vertex_tshape_ids: Vec<u64>,
 		face_edge_offsets: Vec<u32>,
 		face_edge_indices: Vec<u32>,
 		edge_face_offsets: Vec<u32>,
 		edge_face_indices: Vec<u32>,
+		success: bool,
+	}
+
+	/// Operation-local topology correspondence returned by OCCT builders.
+	///
+	/// `relations` is encoded in chunks of six u32 values:
+	/// `[result_kind, result_index, relation, operand, source_kind, source_index]`.
+	/// Kinds are 0=face, 1=edge, 2=vertex; relations are
+	/// 0=unchanged, 1=modified, 2=generated. `deleted` is encoded as
+	/// `[operand, source_kind, source_index]`, and `unresolved` as
+	/// `[result_kind, result_index]`.
+	struct HistoryData {
+		relations: Vec<u32>,
+		deleted: Vec<u32>,
+		unresolved: Vec<u32>,
 		success: bool,
 	}
 
@@ -83,18 +99,18 @@ mod ffi_bridge {
 		// Evaluate any boolean expression on N solids via BOPAlgo_CellsBuilder.
 		// `clauses` は DIMACS-flat DNF (`+i` = solids[i-1] を take、`-i` = avoid、`0` = clause 終端)。
 		// `out_history` の形式は builder_boolean と同じ。
-		fn builder_cells(solids: &CxxVector<TopoDS_Shape>, clauses: &[i64], out_history: &mut Vec<u64>) -> UniquePtr<TopoDS_Shape>;
+		fn builder_cells(solids: &CxxVector<TopoDS_Shape>, clauses: &[i64], out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// Unify shared faces. `out_history` receives flat [new_id, old_id, ...]
 		// pairs (same layout as `builder_boolean`), used by Solid::clean to populate
 		// `Solid::history` and remap the colormap when color is enabled.
-		fn builder_clean(shape: &TopoDS_Shape, out_history: &mut Vec<u64>) -> UniquePtr<TopoDS_Shape>;
+		fn builder_clean(shape: &TopoDS_Shape, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// shell/fillet/chamfer fill `out_history` with flat [post_id, src_id]
 		// pairs (same layout as builder_cells) → Solid::history + colormap remap.
-		fn builder_thick_solid(solid: &TopoDS_Shape, open_faces: &CxxVector<TopoDS_Face>, thickness: f64, out_history: &mut Vec<u64>) -> UniquePtr<TopoDS_Shape>;
-		fn builder_fillet(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, radius: f64, out_history: &mut Vec<u64>) -> UniquePtr<TopoDS_Shape>;
-		fn builder_chamfer(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, distance: f64, out_history: &mut Vec<u64>) -> UniquePtr<TopoDS_Shape>;
+		fn builder_thick_solid(solid: &TopoDS_Shape, open_faces: &CxxVector<TopoDS_Face>, thickness: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_fillet(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, radius: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_chamfer(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, distance: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// ==================== Transforms (solid → solid, no history) ====================
 

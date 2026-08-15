@@ -72,17 +72,104 @@ pub struct Solid {
 	/// Face-derivation history from the most recent boolean operation.
 	///
 	/// Flat `[post_id, src_id, post_id, src_id, ...]` pairs:
-	/// - `post_id` is the TShape* of a face in this Solid (or, after
-	///   decompose, possibly in a sibling result Solid — over-inclusion
-	///   is harmless because consumers filter by `src_id`).
+	/// - `post_id` is the TShape* of a face in this Solid. The legacy list is
+	///   filtered when a compound result is decomposed.
 	/// - `src_id` is the TShape* of the originating face in either
 	///   boolean input (a or b — distinction is intentionally lost;
 	///   TShape* is globally unique so callers filter by membership).
 	///
-	/// Empty for primitives, builders (extrude/sweep/loft/bspline/shell/
-	/// fillet/chamfer), I/O reads, and after scale/mirror/Clone (which
-	/// rebuild topology). Preserved across translate/rotate/color.
+	/// Empty for primitives, source-edge builders (extrude/sweep/loft), I/O
+	/// reads, and after scale/mirror/Clone. Preserved across
+	/// translate/rotate/color. New consumers should prefer `topology_history`.
 	history: Vec<u64>,
+	/// Complete operation-local correspondence for the most recent
+	/// topology-changing operation. Unlike `history`, this is ordinal-based,
+	/// operand-aware, and covers faces, edges, and vertices.
+	topology_history: TopologyHistory,
+}
+
+/// The dimension of an artifact-local topology entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TopologyKind {
+	Face,
+	Edge,
+	Vertex,
+}
+
+/// The way an OCCT builder related an input entity to a result entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TopologyRelationKind {
+	Unchanged,
+	Modified,
+	Generated,
+}
+
+/// A topology entity in one input operand of an operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InputTopology {
+	pub operand: u32,
+	pub kind: TopologyKind,
+	pub index: u32,
+}
+
+/// A topology entity in the operation result artifact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResultTopology {
+	pub kind: TopologyKind,
+	pub index: u32,
+}
+
+/// One many-to-many operation history relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TopologyRelation {
+	pub result: ResultTopology,
+	pub relation: TopologyRelationKind,
+	pub source: InputTopology,
+}
+
+/// Complete topology history from the most recent operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TopologyHistory {
+	relations: Vec<TopologyRelation>,
+	deleted: Vec<InputTopology>,
+	unresolved: Vec<ResultTopology>,
+}
+
+impl TopologyHistory {
+	pub fn relations(&self) -> &[TopologyRelation] {
+		&self.relations
+	}
+
+	pub fn deleted(&self) -> &[InputTopology] {
+		&self.deleted
+	}
+
+	pub fn unresolved(&self) -> &[ResultTopology] {
+		&self.unresolved
+	}
+
+	pub fn sources_for(&self, result: ResultTopology) -> impl Iterator<Item = &TopologyRelation> {
+		self.relations.iter().filter(move |relation| relation.result == result)
+	}
+
+	pub(crate) fn remap_result_to(&self, global: &TopologySnapshot, local: &TopologySnapshot) -> Self {
+		let remap = |result: ResultTopology| -> Option<ResultTopology> {
+			let (global_ids, local_ids) = match result.kind {
+				TopologyKind::Face => (global.face_ids(), local.face_ids()),
+				TopologyKind::Edge => (global.edge_ids(), local.edge_ids()),
+				TopologyKind::Vertex => (global.vertex_ids(), local.vertex_ids()),
+			};
+			let id = *global_ids.get(result.index as usize)?;
+			let index = u32::try_from(local_ids.iter().position(|candidate| *candidate == id)?).ok()?;
+			Some(ResultTopology { kind: result.kind, index })
+		};
+
+		let mut relations = self.relations.iter().filter_map(|relation| Some(TopologyRelation { result: remap(relation.result)?, ..*relation })).collect::<Vec<_>>();
+		relations.sort_unstable_by_key(|item| (item.result.kind as u8, item.result.index, item.source.operand, item.source.kind as u8, item.source.index, item.relation as u8));
+		relations.dedup();
+		let unresolved = self.unresolved.iter().filter_map(|result| remap(*result)).collect();
+		Self { relations, deleted: self.deleted.clone(), unresolved }
+	}
 }
 
 /// One artifact-local topology index produced in a single OCCT traversal.
@@ -90,6 +177,7 @@ pub struct Solid {
 pub struct TopologySnapshot {
 	face_ids: Vec<u64>,
 	edge_ids: Vec<u64>,
+	vertex_ids: Vec<u64>,
 	face_edges: Vec<Vec<u32>>,
 	edge_faces: Vec<Vec<u32>>,
 }
@@ -101,6 +189,10 @@ impl TopologySnapshot {
 
 	pub fn edge_ids(&self) -> &[u64] {
 		&self.edge_ids
+	}
+
+	pub fn vertex_ids(&self) -> &[u64] {
+		&self.vertex_ids
 	}
 
 	pub fn face_edges(&self, face: u32) -> Option<&[u32]> {
@@ -126,7 +218,19 @@ impl Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
+			topology_history: TopologyHistory::default(),
 		}
+	}
+
+	pub(crate) fn with_topology_history(mut self, topology_history: TopologyHistory) -> Self {
+		self.topology_history = topology_history;
+		self
+	}
+
+	/// Return complete, operand-aware topology correspondence for the most
+	/// recent topology-changing operation.
+	pub fn topology_history(&self) -> &TopologyHistory {
+		&self.topology_history
 	}
 
 	// ==================== Internal accessors ====================
@@ -138,13 +242,7 @@ impl Solid {
 
 	/// Query face/edge identity and adjacency in one OCCT traversal.
 	pub fn topology_snapshot(&self) -> Result<TopologySnapshot, Error> {
-		let data = ffi::shape_topology(&self.inner);
-		if !data.success {
-			return Err(Error::TopologyQueryFailed);
-		}
-		let face_edges = decode_adjacency(&data.face_edge_offsets, &data.face_edge_indices, data.face_tshape_ids.len(), data.edge_tshape_ids.len())?;
-		let edge_faces = decode_adjacency(&data.edge_face_offsets, &data.edge_face_indices, data.edge_tshape_ids.len(), data.face_tshape_ids.len())?;
-		Ok(TopologySnapshot { face_ids: data.face_tshape_ids, edge_ids: data.edge_tshape_ids, face_edges, edge_faces })
+		topology_snapshot_from_shape(&self.inner)
 	}
 
 	/// Create a shallow occurrence sharing topology and geometry with this solid.
@@ -155,6 +253,7 @@ impl Solid {
 			self.colormap.clone(),
 			self.history.clone(),
 		)
+		.with_topology_history(self.topology_history.clone())
 	}
 
 	/// Create a rigidly located occurrence without deep-copying its topology.
@@ -201,6 +300,16 @@ impl Solid {
 	}
 }
 
+pub(crate) fn topology_snapshot_from_shape(shape: &ffi::TopoDS_Shape) -> Result<TopologySnapshot, Error> {
+	let data = ffi::shape_topology(shape);
+	if !data.success {
+		return Err(Error::TopologyQueryFailed);
+	}
+	let face_edges = decode_adjacency(&data.face_edge_offsets, &data.face_edge_indices, data.face_tshape_ids.len(), data.edge_tshape_ids.len())?;
+	let edge_faces = decode_adjacency(&data.edge_face_offsets, &data.edge_face_indices, data.edge_tshape_ids.len(), data.face_tshape_ids.len())?;
+	Ok(TopologySnapshot { face_ids: data.face_tshape_ids, edge_ids: data.edge_tshape_ids, vertex_ids: data.vertex_tshape_ids, face_edges, edge_faces })
+}
+
 fn decode_adjacency(offsets: &[u32], indices: &[u32], owner_count: usize, target_count: usize) -> Result<Vec<Vec<u32>>, Error> {
 	if offsets.len() != owner_count + 1 || offsets.first() != Some(&0) || offsets.last().copied() != u32::try_from(indices.len()).ok() {
 		return Err(Error::TopologyQueryFailed);
@@ -216,6 +325,54 @@ fn decode_adjacency(offsets: &[u32], indices: &[u32], owner_count: usize, target
 			Ok(indices[start..end].to_vec())
 		})
 		.collect()
+}
+
+fn decode_topology_kind(value: u32) -> Result<TopologyKind, Error> {
+	match value {
+		0 => Ok(TopologyKind::Face),
+		1 => Ok(TopologyKind::Edge),
+		2 => Ok(TopologyKind::Vertex),
+		_ => Err(Error::TopologyQueryFailed),
+	}
+}
+
+fn decode_topology_history(data: ffi::HistoryData) -> Result<TopologyHistory, Error> {
+	if !data.success || !data.relations.len().is_multiple_of(6) || !data.deleted.len().is_multiple_of(3) || !data.unresolved.len().is_multiple_of(2) {
+		return Err(Error::TopologyQueryFailed);
+	}
+	let mut relations = data
+		.relations
+		.chunks_exact(6)
+		.map(|values| {
+			let relation = match values[2] {
+				0 => TopologyRelationKind::Unchanged,
+				1 => TopologyRelationKind::Modified,
+				2 => TopologyRelationKind::Generated,
+				_ => return Err(Error::TopologyQueryFailed),
+			};
+			Ok(TopologyRelation {
+				result: ResultTopology { kind: decode_topology_kind(values[0])?, index: values[1] },
+				relation,
+				source: InputTopology { operand: values[3], kind: decode_topology_kind(values[4])?, index: values[5] },
+			})
+		})
+		.collect::<Result<Vec<_>, Error>>()?;
+	relations.sort_unstable_by_key(|item| (item.result.kind as u8, item.result.index, item.source.operand, item.source.kind as u8, item.source.index, item.relation as u8));
+	relations.dedup();
+
+	let mut deleted = data.deleted.chunks_exact(3).map(|values| Ok(InputTopology { operand: values[0], kind: decode_topology_kind(values[1])?, index: values[2] })).collect::<Result<Vec<_>, Error>>()?;
+	deleted.sort_unstable_by_key(|item| (item.operand, item.kind as u8, item.index));
+	deleted.dedup();
+
+	let mut unresolved = data.unresolved.chunks_exact(2).map(|values| Ok(ResultTopology { kind: decode_topology_kind(values[0])?, index: values[1] })).collect::<Result<Vec<_>, Error>>()?;
+	unresolved.sort_unstable_by_key(|item| (item.kind as u8, item.index));
+	unresolved.dedup();
+
+	Ok(TopologyHistory { relations, deleted, unresolved })
+}
+
+fn empty_ffi_history() -> ffi::HistoryData {
+	ffi::HistoryData { relations: Vec::new(), deleted: Vec::new(), unresolved: Vec::new(), success: false }
 }
 
 impl SolidStruct for Solid {
@@ -347,10 +504,12 @@ impl SolidStruct for Solid {
 			ffi::face_vec_push(face_vec.pin_mut(), &f.inner);
 		}
 		let mut history: Vec<u64> = Default::default();
-		let shape = ffi::builder_thick_solid(&self.inner, &face_vec, thickness, &mut history);
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::builder_thick_solid(&self.inner, &face_vec, thickness, &mut history, &mut topology_history);
 		if shape.is_null() {
 			return Err(Error::ShellFailed);
 		}
+		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
 		let colormap = self.remap_colormap(&shape, &history);
 		Ok(Solid::new(
@@ -358,7 +517,8 @@ impl SolidStruct for Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
-		))
+		)
+		.with_topology_history(topology_history))
 	}
 
 	// ==================== Fillet / Chamfer ====================
@@ -369,10 +529,12 @@ impl SolidStruct for Solid {
 			ffi::edge_vec_push(edge_vec.pin_mut(), &e.inner);
 		}
 		let mut history: Vec<u64> = Default::default();
-		let shape = ffi::builder_fillet(&self.inner, &edge_vec, radius, &mut history);
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::builder_fillet(&self.inner, &edge_vec, radius, &mut history, &mut topology_history);
 		if shape.is_null() {
 			return Err(Error::FilletFailed);
 		}
+		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
 		let colormap = self.remap_colormap(&shape, &history);
 		Ok(Solid::new(
@@ -380,7 +542,8 @@ impl SolidStruct for Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
-		))
+		)
+		.with_topology_history(topology_history))
 	}
 
 	fn chamfer_edges<'a>(&self, distance: f64, edges: impl IntoIterator<Item = &'a Edge>) -> Result<Self, Error> {
@@ -389,10 +552,12 @@ impl SolidStruct for Solid {
 			ffi::edge_vec_push(edge_vec.pin_mut(), &e.inner);
 		}
 		let mut history: Vec<u64> = Default::default();
-		let shape = ffi::builder_chamfer(&self.inner, &edge_vec, distance, &mut history);
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::builder_chamfer(&self.inner, &edge_vec, distance, &mut history, &mut topology_history);
 		if shape.is_null() {
 			return Err(Error::ChamferFailed);
 		}
+		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
 		let colormap = self.remap_colormap(&shape, &history);
 		Ok(Solid::new(
@@ -400,7 +565,8 @@ impl SolidStruct for Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
-		))
+		)
+		.with_topology_history(topology_history))
 	}
 
 	// ==================== Sweep ====================
@@ -556,10 +722,12 @@ impl SolidStruct for Solid {
 
 	fn clean(&self) -> Result<Self, Error> {
 		let mut history: Vec<u64> = Default::default();
-		let inner = ffi::builder_clean(&self.inner, &mut history);
+		let mut topology_history = empty_ffi_history();
+		let inner = ffi::builder_clean(&self.inner, &mut history, &mut topology_history);
 		if inner.is_null() {
 			return Err(Error::CleanFailed);
 		}
+		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
 		let colormap = self.remap_colormap(&inner, &history);
 		Ok(Solid::new(
@@ -567,7 +735,8 @@ impl SolidStruct for Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
-		))
+		)
+		.with_topology_history(topology_history))
 	}
 
 	// ==================== Boolean primitive ====================
@@ -589,6 +758,7 @@ impl SolidStruct for Solid {
 				#[cfg(feature = "color")]
 				colormap: s.colormap.clone(),
 				history: s.history.clone(),
+				topology_history: s.topology_history.clone(),
 			})
 			.collect();
 		Boolean::from_parts(solids, clauses.into_iter().collect())
@@ -606,10 +776,12 @@ impl SolidStruct for Solid {
 			ffi::shape_vec_push(solid_vec.pin_mut(), s.inner());
 		}
 		let mut history: Vec<u64> = Default::default();
-		let inner = ffi::builder_cells(&solid_vec, clauses, &mut history);
+		let mut topology_history = empty_ffi_history();
+		let inner = ffi::builder_cells(&solid_vec, clauses, &mut history, &mut topology_history);
 		if inner.is_null() {
 			return Err(Error::BooleanOperationFailed);
 		}
+		let topology_history = decode_topology_history(topology_history)?;
 
 		#[cfg(feature = "color")]
 		let colormap = {
@@ -635,6 +807,7 @@ impl SolidStruct for Solid {
 			#[cfg(feature = "color")]
 			colormap,
 			history,
+			topology_history,
 		);
 		#[cfg_attr(not(feature = "color"), allow(unused_mut))]
 		let mut out = compound.decompose();
@@ -725,12 +898,12 @@ impl SolidStruct for Solid {
 		// Existing face colours are dropped: painting the whole solid is a statement
 		// about the whole solid.
 		let colormap = std::collections::HashMap::from([(ffi::shape_tshape_id(&self.inner), c)]);
-		Self::new(self.inner, colormap, self.history)
+		Self::new(self.inner, colormap, self.history).with_topology_history(self.topology_history)
 	}
 
 	#[cfg(feature = "color")]
 	fn color_clear(self) -> Self {
-		Self::new(self.inner, std::collections::HashMap::new(), self.history)
+		Self::new(self.inner, std::collections::HashMap::new(), self.history).with_topology_history(self.topology_history)
 	}
 }
 
@@ -749,6 +922,7 @@ impl Transform for Solid {
 			self.colormap,
 			self.history,
 		)
+		.with_topology_history(self.topology_history)
 	}
 
 	fn rotate(self, axis_origin: DVec3, axis_direction: DVec3, angle: f64) -> Self {
@@ -759,6 +933,7 @@ impl Transform for Solid {
 			self.colormap,
 			self.history,
 		)
+		.with_topology_history(self.topology_history)
 	}
 
 	// scale/mirror consume self for API consistency, but internally clone the geometry.

@@ -13,7 +13,7 @@ pub mod occt;
 pub use occt::{
 	edge::Edge,
 	face::Face,
-	solid::{Solid, TopologySnapshot},
+	solid::{InputTopology, ResultTopology, Solid, TopologyHistory, TopologyKind, TopologyRelation, TopologyRelationKind, TopologySnapshot},
 };
 pub(crate) mod traits;
 // wasm32: no-op WASI/`env` import shims (self-contained wasm). Kept alive by the

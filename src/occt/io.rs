@@ -95,7 +95,7 @@ pub(super) fn read_step<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 			return Err(Error::StepReadFailed);
 		}
 		let colormap: std::collections::HashMap<u64, Color> = ids.into_iter().zip(rgb.chunks_exact(3)).map(|(id, c)| (id, Color { r: c[0], g: c[1], b: c[2] })).collect();
-		Ok(CompoundShape::from_raw(inner, colormap, Default::default()).decompose())
+		Ok(CompoundShape::from_raw(inner, colormap, Default::default(), Default::default()).decompose())
 	}
 	#[cfg(not(feature = "color"))]
 	{
@@ -104,7 +104,7 @@ pub(super) fn read_step<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 		if inner.is_null() {
 			return Err(Error::StepReadFailed);
 		}
-		Ok(CompoundShape::from_raw(inner, Default::default()).decompose())
+		Ok(CompoundShape::from_raw(inner, Default::default(), Default::default()).decompose())
 	}
 }
 
@@ -125,11 +125,11 @@ pub(super) fn read_brep<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 	{
 		let ids = trailer_ids(&inner);
 		let colormap = read_color_trailer(buf.get(consumed..).unwrap_or_default()).into_iter().filter_map(|(idx, color)| ids.get(idx as usize).map(|&id| (id, color))).collect();
-		Ok(CompoundShape::from_raw(inner, colormap, Default::default()).decompose())
+		Ok(CompoundShape::from_raw(inner, colormap, Default::default(), Default::default()).decompose())
 	}
 	#[cfg(not(feature = "color"))]
 	{
-		Ok(CompoundShape::from_raw(inner, Default::default()).decompose())
+		Ok(CompoundShape::from_raw(inner, Default::default(), Default::default()).decompose())
 	}
 }
 

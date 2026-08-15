@@ -410,12 +410,188 @@ static void relay_into_history(
     }
 }
 
+// Topology history exposed to Plex uses artifact-local ordinals instead of
+// process-local TShape addresses. This also preserves the operand namespace
+// and relations generated across dimensions (for example, an edge generating
+// a fillet face).
+enum class HistoryKind : uint32_t { Face = 0, Edge = 1, Vertex = 2 };
+enum class HistoryRelation : uint32_t { Unchanged = 0, Modified = 1, Generated = 2 };
+
+struct HistoryMaps {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+
+    explicit HistoryMaps(const TopoDS_Shape& shape) {
+        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+        TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
+    }
+
+    const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& map(
+        HistoryKind kind) const
+    {
+        switch (kind) {
+            case HistoryKind::Face: return faces;
+            case HistoryKind::Edge: return edges;
+            case HistoryKind::Vertex: return vertices;
+        }
+        return faces;
+    }
+};
+
+static bool history_kind(const TopoDS_Shape& shape, HistoryKind& kind) {
+    switch (shape.ShapeType()) {
+        case TopAbs_FACE: kind = HistoryKind::Face; return true;
+        case TopAbs_EDGE: kind = HistoryKind::Edge; return true;
+        case TopAbs_VERTEX: kind = HistoryKind::Vertex; return true;
+        default: return false;
+    }
+}
+
+static void append_history_relation(
+    HistoryData& out,
+    const HistoryMaps& result_maps,
+    const TopoDS_Shape& result,
+    HistoryRelation relation,
+    uint32_t operand,
+    HistoryKind source_kind,
+    uint32_t source_index)
+{
+    HistoryKind result_kind;
+    if (!history_kind(result, result_kind)) return;
+    const int result_index = result_maps.map(result_kind).FindIndex(result);
+    if (result_index <= 0) return;
+    out.relations.push_back(static_cast<uint32_t>(result_kind));
+    out.relations.push_back(static_cast<uint32_t>(result_index - 1));
+    out.relations.push_back(static_cast<uint32_t>(relation));
+    out.relations.push_back(operand);
+    out.relations.push_back(static_cast<uint32_t>(source_kind));
+    out.relations.push_back(source_index);
+}
+
+static void append_generated_shapes(
+    HistoryData& out,
+    const HistoryMaps& result_maps,
+    const NCollection_List<TopoDS_Shape>& generated,
+    uint32_t operand,
+    HistoryKind source_kind,
+    uint32_t source_index)
+{
+    for (NCollection_List<TopoDS_Shape>::Iterator it(generated); it.More(); it.Next()) {
+        const TopoDS_Shape& generated_shape = it.Value();
+        HistoryKind generated_kind;
+        if (history_kind(generated_shape, generated_kind)) {
+            append_history_relation(out, result_maps, generated_shape,
+                HistoryRelation::Generated, operand, source_kind, source_index);
+            continue;
+        }
+        for (HistoryKind kind : {HistoryKind::Face, HistoryKind::Edge, HistoryKind::Vertex}) {
+            const TopAbs_ShapeEnum shape_kind = kind == HistoryKind::Face
+                ? TopAbs_FACE
+                : (kind == HistoryKind::Edge ? TopAbs_EDGE : TopAbs_VERTEX);
+            for (TopExp_Explorer ex(generated_shape, shape_kind); ex.More(); ex.Next()) {
+                append_history_relation(out, result_maps, ex.Current(),
+                    HistoryRelation::Generated, operand, source_kind, source_index);
+            }
+        }
+    }
+}
+
+template <typename Builder>
+static void append_builder_topology_history(
+    Builder& builder,
+    const TopoDS_Shape& input,
+    uint32_t operand,
+    const HistoryMaps& result_maps,
+    HistoryData& out)
+{
+    const HistoryMaps input_maps(input);
+    for (HistoryKind source_kind : {HistoryKind::Face, HistoryKind::Edge, HistoryKind::Vertex}) {
+        const auto& sources = input_maps.map(source_kind);
+        for (int source_ordinal = 1; source_ordinal <= sources.Extent(); ++source_ordinal) {
+            const TopoDS_Shape& source = sources(source_ordinal);
+            const uint32_t source_index = static_cast<uint32_t>(source_ordinal - 1);
+            bool related = false;
+
+            const NCollection_List<TopoDS_Shape>& modified = builder.Modified(source);
+            for (NCollection_List<TopoDS_Shape>::Iterator it(modified); it.More(); it.Next()) {
+                append_history_relation(out, result_maps, it.Value(),
+                    HistoryRelation::Modified, operand, source_kind, source_index);
+                related = true;
+            }
+
+            const NCollection_List<TopoDS_Shape>& generated = builder.Generated(source);
+            if (!generated.IsEmpty()) {
+                append_generated_shapes(out, result_maps, generated, operand,
+                    source_kind, source_index);
+                related = true;
+            }
+
+            if (!related && result_maps.map(source_kind).FindIndex(source) > 0) {
+                append_history_relation(out, result_maps, source,
+                    HistoryRelation::Unchanged, operand, source_kind, source_index);
+                related = true;
+            }
+
+            if (!related || builder.IsDeleted(source)) {
+                out.deleted.push_back(operand);
+                out.deleted.push_back(static_cast<uint32_t>(source_kind));
+                out.deleted.push_back(source_index);
+            }
+        }
+    }
+}
+
+static void append_identity_topology_history(
+    const TopoDS_Shape& input,
+    uint32_t operand,
+    const HistoryMaps& result_maps,
+    HistoryData& out)
+{
+    const HistoryMaps input_maps(input);
+    for (HistoryKind kind : {HistoryKind::Face, HistoryKind::Edge, HistoryKind::Vertex}) {
+        const auto& inputs = input_maps.map(kind);
+        const auto& results = result_maps.map(kind);
+        const int count = std::min(inputs.Extent(), results.Extent());
+        for (int ordinal = 1; ordinal <= count; ++ordinal) {
+            append_history_relation(out, result_maps, results(ordinal),
+                HistoryRelation::Unchanged, operand, kind,
+                static_cast<uint32_t>(ordinal - 1));
+        }
+    }
+}
+
+static void finish_topology_history(const HistoryMaps& result_maps, HistoryData& out) {
+    for (HistoryKind kind : {HistoryKind::Face, HistoryKind::Edge, HistoryKind::Vertex}) {
+        const uint32_t kind_value = static_cast<uint32_t>(kind);
+        const auto& results = result_maps.map(kind);
+        for (int ordinal = 1; ordinal <= results.Extent(); ++ordinal) {
+            const uint32_t result_index = static_cast<uint32_t>(ordinal - 1);
+            bool resolved = false;
+            for (size_t offset = 0; offset + 5 < out.relations.size(); offset += 6) {
+                if (out.relations[offset] == kind_value
+                    && out.relations[offset + 1] == result_index) {
+                    resolved = true;
+                    break;
+                }
+            }
+            if (!resolved) {
+                out.unresolved.push_back(kind_value);
+                out.unresolved.push_back(result_index);
+            }
+        }
+    }
+    out.success = true;
+}
+
 // Evaluate any boolean expression in DNF on N solids via BOPAlgo_CellsBuilder.
 // 1 回の Perform() で全交差を計算し、clause ごとに AddToResult を呼ぶ。
 std::unique_ptr<TopoDS_Shape> builder_cells(
     const std::vector<TopoDS_Shape>& solids,
     rust::Slice<const int64_t> clauses,
-    rust::Vec<uint64_t>& out_history)
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
 {
     try {
         if (solids.empty() || clauses.size() == 0) return nullptr;
@@ -429,6 +605,10 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
             std::unordered_map<uint64_t, uint64_t> relay;
             relay_from_pair(solids[0], copier.Shape(), relay);
             relay_into_history(&relay, nullptr, out_history);
+            const HistoryMaps result_maps(copier.Shape());
+            append_identity_topology_history(solids[0], 0, result_maps,
+                out_topology_history);
+            finish_topology_history(result_maps, out_topology_history);
             return shape;
         }
 
@@ -463,10 +643,19 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
             relay_from_builder(cb, s, relay1);
         }
 
+        const HistoryMaps pre_copy_maps(cb.Shape());
+        for (size_t operand = 0; operand < solids.size(); ++operand) {
+            append_builder_topology_history(cb, solids[operand],
+                static_cast<uint32_t>(operand), pre_copy_maps,
+                out_topology_history);
+        }
+
         BRepBuilderAPI_Copy copier(cb.Shape(), true, false);
         auto shape = std::make_unique<TopoDS_Shape>(copier.Shape());
         relay_from_pair(cb.Shape(), copier.Shape(), relay2);
         relay_into_history(&relay1, &relay2, out_history);
+        const HistoryMaps post_copy_maps(copier.Shape());
+        finish_topology_history(post_copy_maps, out_topology_history);
         return shape;
     } catch (const Standard_Failure&) {
         return nullptr;
@@ -479,7 +668,8 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
 // `builder_boolean`'s history.
 std::unique_ptr<TopoDS_Shape> builder_clean(
     const TopoDS_Shape& shape,
-    rust::Vec<uint64_t>& out_history)
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
 {
     try {
         ShapeUpgrade_UnifySameDomain unifier(shape, true, true, true);
@@ -487,6 +677,7 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
         unifier.Build();
 
         auto result = std::make_unique<TopoDS_Shape>(unifier.Shape());
+        const HistoryMaps result_maps(*result);
 
         Handle(BRepTools_History) history = unifier.History();
         if (!history.IsNull()) {
@@ -506,7 +697,53 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
                     out_history.push_back(old_id);
                 }
             }
+
+            const HistoryMaps input_maps(shape);
+            for (HistoryKind source_kind : {HistoryKind::Face, HistoryKind::Edge,
+                                            HistoryKind::Vertex}) {
+                const auto& sources = input_maps.map(source_kind);
+                for (int source_ordinal = 1; source_ordinal <= sources.Extent();
+                     ++source_ordinal) {
+                    const TopoDS_Shape& source = sources(source_ordinal);
+                    const uint32_t source_index =
+                        static_cast<uint32_t>(source_ordinal - 1);
+                    bool related = false;
+                    const NCollection_List<TopoDS_Shape>& modified =
+                        history->Modified(source);
+                    for (NCollection_List<TopoDS_Shape>::Iterator it(modified);
+                         it.More(); it.Next()) {
+                        append_history_relation(out_topology_history, result_maps,
+                            it.Value(), HistoryRelation::Modified, 0, source_kind,
+                            source_index);
+                        related = true;
+                    }
+                    const NCollection_List<TopoDS_Shape>& generated =
+                        history->Generated(source);
+                    if (!generated.IsEmpty()) {
+                        append_generated_shapes(out_topology_history, result_maps,
+                            generated, 0, source_kind, source_index);
+                        related = true;
+                    }
+                    if (!related
+                        && result_maps.map(source_kind).FindIndex(source) > 0) {
+                        append_history_relation(out_topology_history, result_maps,
+                            source, HistoryRelation::Unchanged, 0, source_kind,
+                            source_index);
+                        related = true;
+                    }
+                    if (!related || history->IsRemoved(source)) {
+                        out_topology_history.deleted.push_back(0);
+                        out_topology_history.deleted.push_back(
+                            static_cast<uint32_t>(source_kind));
+                        out_topology_history.deleted.push_back(source_index);
+                    }
+                }
+            }
+        } else {
+            append_identity_topology_history(shape, 0, result_maps,
+                out_topology_history);
         }
+        finish_topology_history(result_maps, out_topology_history);
         return result;
     } catch (const Standard_Failure&) {
         return nullptr;
@@ -743,12 +980,14 @@ std::unique_ptr<std::vector<TopoDS_Edge>> shape_edges(const TopoDS_Shape& shape)
 }
 
 std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape) {
-    // Faces in a valid shape are already unique under TopExp_Explorer.
-    auto out = std::make_unique<std::vector<TopoDS_Face>>();
-    for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
-        out->push_back(TopoDS::Face(ex.Current()));
-    }
-    return out;
+	NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faceMap;
+	TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+	auto out = std::make_unique<std::vector<TopoDS_Face>>();
+	out->reserve(faceMap.Extent());
+	for (int i = 1; i <= faceMap.Extent(); i++) {
+		out->push_back(TopoDS::Face(faceMap(i)));
+	}
+	return out;
 }
 
 TopologyData shape_topology(const TopoDS_Shape& shape) {
@@ -757,8 +996,10 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
     try {
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
         TopExp::MapShapes(shape, TopAbs_FACE, faces);
         TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+        TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
 
         result.face_edge_offsets.reserve(static_cast<size_t>(faces.Extent()) + 1);
         result.edge_face_offsets.reserve(static_cast<size_t>(edges.Extent()) + 1);
@@ -790,6 +1031,11 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
             for (uint32_t face_index : adjacent) result.edge_face_indices.push_back(face_index);
             result.edge_face_offsets.push_back(
                 static_cast<uint32_t>(result.edge_face_indices.size()));
+        }
+        for (int vertex_index = 1; vertex_index <= vertices.Extent(); ++vertex_index) {
+            const TopoDS_Shape& vertex = vertices(vertex_index);
+            result.vertex_tshape_ids.push_back(
+                reinterpret_cast<uint64_t>(vertex.TShape().get()));
         }
         result.success = true;
     } catch (const Standard_Failure&) {
@@ -1328,7 +1574,8 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Face>& open_faces,
     double thickness,
-    rust::Vec<uint64_t>& out_history)
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
 {
     try {
         // Empty open_faces: MakeThickSolidByJoin degenerates to a plain offset
@@ -1373,7 +1620,12 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             std::unordered_map<uint64_t, uint64_t> relay;
             relay_from_pair(solid, solid, relay);
             relay_into_history(&relay, nullptr, out_history);
-            return std::make_unique<TopoDS_Shape>(solid_maker.Solid());
+            auto result = std::make_unique<TopoDS_Shape>(solid_maker.Solid());
+            const HistoryMaps result_maps(*result);
+            append_builder_topology_history(offset, solid, 0, result_maps,
+                out_topology_history);
+            finish_topology_history(result_maps, out_topology_history);
+            return result;
         }
 
         NCollection_List<TopoDS_Shape> faces_to_remove;
@@ -1402,7 +1654,12 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             }
         }
         relay_into_history(&relay, nullptr, out_history);
-        return std::make_unique<TopoDS_Shape>(builder.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(builder.Shape());
+        const HistoryMaps result_maps(*result);
+        append_builder_topology_history(builder, solid, 0, result_maps,
+            out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure&) {
         return nullptr;
     }
@@ -1412,7 +1669,8 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Edge>& edges,
     double radius,
-    rust::Vec<uint64_t>& out_history)
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
 {
     try {
         if (edges.empty()) {
@@ -1420,7 +1678,12 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
             std::unordered_map<uint64_t, uint64_t> relay;
             relay_from_pair(solid, solid, relay);
             relay_into_history(&relay, nullptr, out_history);
-            return std::make_unique<TopoDS_Shape>(solid);
+            auto result = std::make_unique<TopoDS_Shape>(solid);
+            const HistoryMaps result_maps(*result);
+            append_identity_topology_history(solid, 0, result_maps,
+                out_topology_history);
+            finish_topology_history(result_maps, out_topology_history);
+            return result;
         }
         BRepFilletAPI_MakeFillet mk(solid);
         for (const TopoDS_Edge& e : edges) {
@@ -1442,7 +1705,12 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
         std::unordered_map<uint64_t, uint64_t> relay;
         relay_from_builder(mk, solid, relay);
         relay_into_history(&relay, nullptr, out_history);
-        return std::make_unique<TopoDS_Shape>(result);
+        auto output = std::make_unique<TopoDS_Shape>(result);
+        const HistoryMaps result_maps(*output);
+        append_builder_topology_history(mk, solid, 0, result_maps,
+            out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return output;
     } catch (const Standard_Failure&) {
         return nullptr;
     }
@@ -1452,7 +1720,8 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Edge>& edges,
     double distance,
-    rust::Vec<uint64_t>& out_history)
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
 {
     try {
         if (edges.empty()) {
@@ -1460,7 +1729,12 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
             std::unordered_map<uint64_t, uint64_t> relay;
             relay_from_pair(solid, solid, relay);
             relay_into_history(&relay, nullptr, out_history);
-            return std::make_unique<TopoDS_Shape>(solid);
+            auto result = std::make_unique<TopoDS_Shape>(solid);
+            const HistoryMaps result_maps(*result);
+            append_identity_topology_history(solid, 0, result_maps,
+                out_topology_history);
+            finish_topology_history(result_maps, out_topology_history);
+            return result;
         }
         BRepFilletAPI_MakeChamfer mk(solid);
         for (const TopoDS_Edge& e : edges) {
@@ -1482,7 +1756,12 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
         std::unordered_map<uint64_t, uint64_t> relay;
         relay_from_builder(mk, solid, relay);
         relay_into_history(&relay, nullptr, out_history);
-        return std::make_unique<TopoDS_Shape>(result);
+        auto output = std::make_unique<TopoDS_Shape>(result);
+        const HistoryMaps result_maps(*output);
+        append_builder_topology_history(mk, solid, 0, result_maps,
+            out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return output;
     } catch (const Standard_Failure&) {
         return nullptr;
     }

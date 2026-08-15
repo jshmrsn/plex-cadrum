@@ -24,6 +24,7 @@ struct RustWriter;
 // Forward-declare shared structs (defined by cxx in ffi.rs.h)
 struct MeshData;
 struct TopologyData;
+struct HistoryData;
 
 // ==================== Shape I/O (streambuf callback) ====================
 
@@ -86,16 +87,18 @@ std::unique_ptr<TopoDS_Shape> deep_copy(const TopoDS_Shape& shape);
 // 全 clause で同一 material を使い RemoveInternalBoundaries() で内部境界を除去。
 // `out_history` の形式は builder_boolean と同じ。
 std::unique_ptr<TopoDS_Shape> builder_cells(
-    const std::vector<TopoDS_Shape>& solids,
-    rust::Slice<const int64_t> clauses,
-    rust::Vec<uint64_t>& out_history);
+	const std::vector<TopoDS_Shape>& solids,
+	rust::Slice<const int64_t> clauses,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
 
 // Unify shared faces / collinear edges via ShapeUpgrade_UnifySameDomain.
 // `out_history` encodes how each old face maps onto the unified result.
 // Rust uses it to remap the colormap when the `color` feature is enabled.
 std::unique_ptr<TopoDS_Shape> builder_clean(
-    const TopoDS_Shape& shape,
-    rust::Vec<uint64_t>& out_history);
+	const TopoDS_Shape& shape,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
 
 // Shell (hollow) the solid by removing `open_faces` and offsetting the
 // remaining faces by `thickness` via BRepOffsetAPI_MakeThickSolid. Negative
@@ -106,9 +109,10 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
 // identity for pass-through). Generated walls have no face source, absent.
 std::unique_ptr<TopoDS_Shape> builder_thick_solid(
     const TopoDS_Shape& solid,
-    const std::vector<TopoDS_Face>& open_faces,
-    double thickness,
-    rust::Vec<uint64_t>& out_history);
+	const std::vector<TopoDS_Face>& open_faces,
+	double thickness,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
 
 // Fillet the given edges of `solid` with a uniform radius using
 // BRepFilletAPI_MakeFillet. Empty `edges` is a no-op (returns a shallow
@@ -119,9 +123,10 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
 // untouched). Generated fillet arc faces come from edges, absent.
 std::unique_ptr<TopoDS_Shape> builder_fillet(
     const TopoDS_Shape& solid,
-    const std::vector<TopoDS_Edge>& edges,
-    double radius,
-    rust::Vec<uint64_t>& out_history);
+	const std::vector<TopoDS_Edge>& edges,
+	double radius,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
 
 // Chamfer (symmetric bevel) the given edges of `solid` with a uniform
 // distance using BRepFilletAPI_MakeChamfer. Empty `edges` is a no-op
@@ -133,9 +138,10 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
 // untouched). Generated chamfer faces come from edges, absent.
 std::unique_ptr<TopoDS_Shape> builder_chamfer(
     const TopoDS_Shape& solid,
-    const std::vector<TopoDS_Edge>& edges,
-    double distance,
-    rust::Vec<uint64_t>& out_history);
+	const std::vector<TopoDS_Edge>& edges,
+	double distance,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
 
 // ==================== Transforms (solid → solid, no history) ====================
 //

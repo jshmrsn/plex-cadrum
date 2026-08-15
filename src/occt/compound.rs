@@ -1,5 +1,5 @@
 use super::ffi;
-use super::solid::Solid;
+use super::solid::{topology_snapshot_from_shape, Solid, TopologyHistory};
 #[cfg(feature = "color")]
 use crate::common::color::Color;
 
@@ -11,6 +11,7 @@ pub(crate) struct CompoundShape {
 	#[cfg(feature = "color")]
 	colormap: std::collections::HashMap<u64, Color>,
 	history: Vec<u64>,
+	topology_history: TopologyHistory,
 }
 
 impl CompoundShape {
@@ -33,16 +34,18 @@ impl CompoundShape {
 			#[cfg(feature = "color")]
 			colormap,
 			history: Default::default(),
+			topology_history: TopologyHistory::default(),
 		}
 	}
 
 	/// Create a compound from a raw `TopoDS_Shape` (e.g. from I/O or boolean ops).
-	pub fn from_raw(inner: cxx::UniquePtr<ffi::TopoDS_Shape>, #[cfg(feature = "color")] colormap: std::collections::HashMap<u64, Color>, history: Vec<u64>) -> Self {
+	pub fn from_raw(inner: cxx::UniquePtr<ffi::TopoDS_Shape>, #[cfg(feature = "color")] colormap: std::collections::HashMap<u64, Color>, history: Vec<u64>, topology_history: TopologyHistory) -> Self {
 		CompoundShape {
 			inner,
 			#[cfg(feature = "color")]
 			colormap,
 			history,
+			topology_history,
 		}
 	}
 
@@ -59,20 +62,33 @@ impl CompoundShape {
 
 	/// Decompose into individual solids, consuming the compound.
 	///
-	/// Each result solid receives a clone of the full `history` — over-inclusion
-	/// is harmless because `iter_history()` consumers filter pairs by checking
-	/// `src_id` against the original input's face IDs.
+	/// Result-local topology relations are filtered and re-indexed, so sibling
+	/// solids cannot claim provenance for one another.
 	pub fn decompose(self) -> Vec<Solid> {
 		let solid_shapes = ffi::decompose_into_solids(&self.inner);
+		let global_topology = topology_snapshot_from_shape(&self.inner).ok();
 		solid_shapes
 			.iter()
 			.map(|s| {
+				let local_topology = topology_snapshot_from_shape(s).ok();
+				let history = local_topology.as_ref().map_or_else(
+					|| self.history.clone(),
+					|topology| {
+						let local_faces = topology.face_ids().iter().copied().collect::<std::collections::HashSet<_>>();
+						self.history.chunks_exact(2).filter(|pair| local_faces.contains(&pair[0])).flatten().copied().collect()
+					},
+				);
+				let topology_history = match (&global_topology, &local_topology) {
+					(Some(global), Some(local)) => self.topology_history.remap_result_to(global, local),
+					_ => TopologyHistory::default(),
+				};
 				Solid::new(
 					ffi::clone_shape_handle(s),
 					#[cfg(feature = "color")]
 					self.colormap.clone(),
-					self.history.clone(),
+					history,
 				)
+				.with_topology_history(topology_history)
 			})
 			.collect()
 	}
