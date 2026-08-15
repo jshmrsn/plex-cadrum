@@ -283,6 +283,51 @@ impl Solid {
 		boolean_build_with_progress(b, progress)
 	}
 
+	pub fn extrude_cancelable<'a>(profile: impl IntoIterator<Item = &'a Edge>, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		let mut profile_vec = ffi::edge_vec_new();
+		for edge in profile {
+			ffi::edge_vec_push(profile_vec.pin_mut(), &edge.inner);
+		}
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::make_extrude(&profile_vec, direction.x, direction.y, direction.z, progress, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::ExtrudeFailed });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			std::collections::HashMap::new(),
+			Default::default(),
+		)
+		.with_topology_history(topology_history))
+	}
+
+	pub fn sweep_cancelable<'a, 'b, 'c>(profile: impl IntoIterator<Item = &'a Edge>, spine: impl IntoIterator<Item = &'b Edge>, orient: ProfileOrient<'c>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		let mut profile_vec = ffi::edge_vec_new();
+		for edge in profile {
+			ffi::edge_vec_push(profile_vec.pin_mut(), &edge.inner);
+		}
+		let mut spine_vec = ffi::edge_vec_new();
+		for edge in spine {
+			ffi::edge_vec_push(spine_vec.pin_mut(), &edge.inner);
+		}
+		let (kind, ux, uy, uz, auxiliary) = encode_orient(orient);
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::make_pipe_shell(&profile_vec, &spine_vec, kind, ux, uy, uz, &auxiliary, progress, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::SweepFailed });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			std::collections::HashMap::new(),
+			Default::default(),
+		)
+		.with_topology_history(topology_history))
+	}
+
 	// ==================== Internal accessors ====================
 
 	/// Borrow the underlying `TopoDS_Shape` (crate-internal only).
@@ -646,20 +691,7 @@ impl SolidStruct for Solid {
 	// ==================== Extrude ====================
 
 	fn extrude<'a>(profile: impl IntoIterator<Item = &'a Edge>, dir: DVec3) -> Result<Self, Error> {
-		let mut profile_vec = ffi::edge_vec_new();
-		for e in profile {
-			ffi::edge_vec_push(profile_vec.pin_mut(), &e.inner);
-		}
-		let shape = ffi::make_extrude(&profile_vec, dir.x, dir.y, dir.z);
-		if shape.is_null() {
-			return Err(Error::ExtrudeFailed);
-		}
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		))
+		Self::extrude_cancelable(profile, dir, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Shell ====================
@@ -700,25 +732,7 @@ impl SolidStruct for Solid {
 	// ==================== Sweep ====================
 
 	fn sweep<'a, 'b, 'c>(profile: impl IntoIterator<Item = &'a Edge>, spine: impl IntoIterator<Item = &'b Edge>, orient: ProfileOrient<'c>) -> Result<Self, Error> {
-		let mut profile_vec = ffi::edge_vec_new();
-		for e in profile {
-			ffi::edge_vec_push(profile_vec.pin_mut(), &e.inner);
-		}
-		let mut spine_vec = ffi::edge_vec_new();
-		for e in spine {
-			ffi::edge_vec_push(spine_vec.pin_mut(), &e.inner);
-		}
-		let (kind, ux, uy, uz, aux_vec) = encode_orient(orient);
-		let shape = ffi::make_pipe_shell(&profile_vec, &spine_vec, kind, ux, uy, uz, &aux_vec);
-		if shape.is_null() {
-			return Err(Error::SweepFailed);
-		}
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		))
+		Self::sweep_cancelable(profile, spine, orient, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Loft / ThruSections ====================
@@ -1020,45 +1034,32 @@ impl Transform for Solid {
 	//      BRepBuilderAPI_Transform.cxx:48-49 (myUseModif branch)
 
 	fn scale(self, center: DVec3, factor: f64) -> Self {
-		let inner = ffi::transform_scale(&self.inner, center.x, center.y, center.z, factor);
+		let mut topology_history = empty_ffi_history();
+		let inner = ffi::transform_scale(&self.inner, center.x, center.y, center.z, factor, &mut topology_history);
 		#[cfg(feature = "color")]
 		let colormap = remap_colormap_by_order(&self.inner, &inner, &self.colormap);
-		// scale/mirror rebuild topology via BRepBuilderAPI_Transform → post_ids
-		// in old `history` no longer exist. Drop history (caller must re-derive
-		// from a fresh boolean call).
+		let topology_history = decode_topology_history(topology_history).unwrap_or_default();
 		Solid::new(
 			inner,
 			#[cfg(feature = "color")]
 			colormap,
 			Default::default(),
 		)
+		.with_topology_history(topology_history)
 	}
 
 	fn mirror(self, plane_origin: DVec3, plane_normal: DVec3) -> Self {
-		let inner = ffi::transform_mirror(&self.inner, plane_origin.x, plane_origin.y, plane_origin.z, plane_normal.x, plane_normal.y, plane_normal.z);
+		let mut topology_history = empty_ffi_history();
+		let inner = ffi::transform_mirror(&self.inner, plane_origin.x, plane_origin.y, plane_origin.z, plane_normal.x, plane_normal.y, plane_normal.z, &mut topology_history);
 		#[cfg(feature = "color")]
 		let colormap = remap_colormap_by_order(&self.inner, &inner, &self.colormap);
+		let topology_history = decode_topology_history(topology_history).unwrap_or_default();
 		Solid::new(
 			inner,
 			#[cfg(feature = "color")]
 			colormap,
 			Default::default(),
 		)
-	}
-}
-
-impl Clone for Solid {
-	fn clone(&self) -> Self {
-		let inner = ffi::deep_copy(&self.inner);
-		#[cfg(feature = "color")]
-		let colormap = remap_colormap_by_order(&self.inner, &inner, &self.colormap);
-		// deep_copy rebuilds topology — post_ids in `history` no longer point
-		// to faces of the new shape. Drop history rather than remapping.
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			colormap,
-			Default::default(),
-		)
+		.with_topology_history(topology_history)
 	}
 }

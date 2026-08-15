@@ -12,6 +12,15 @@ fn cancelled_fillet_is_distinct_from_an_algorithm_failure() {
 }
 
 #[test]
+fn cancelled_extrusion_stops_before_publishing_partial_topology() {
+	let profile = cadrum::Edge::polygon(&[DVec3::ZERO, DVec3::X * 10.0, DVec3::new(10.0, 10.0, 0.0), DVec3::Y * 10.0]).expect("profile");
+	let cancellation = CancellationToken::new();
+	cancellation.cancel();
+
+	assert!(matches!(Solid::extrude_cancelable(&profile, DVec3::Z * 10.0, &cancellation), Err(Error::Cancelled)));
+}
+
+#[test]
 fn cancelled_boolean_does_not_poison_later_occt_work() {
 	let left = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	let right = Solid::cube(DVec3::splat(5.0), DVec3::splat(15.0));

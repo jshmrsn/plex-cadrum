@@ -804,13 +804,19 @@ std::unique_ptr<TopoDS_Shape> transform_rotate(
 std::unique_ptr<TopoDS_Shape> transform_scale(
     const TopoDS_Shape& shape,
     double cx, double cy, double cz,
-    double factor)
+    double factor,
+    HistoryData& out_topology_history)
 {
     try {
         gp_Trsf trsf;
         trsf.SetScale(gp_Pnt(cx, cy, cz), factor);
         BRepBuilderAPI_Transform transform(shape, trsf, true);
-        return std::make_unique<TopoDS_Shape>(transform.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(transform.Shape());
+        const HistoryMaps result_maps(*result);
+        append_builder_topology_history(transform, shape, 0, result_maps,
+            out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure&) {
         return nullptr;
     }
@@ -819,13 +825,19 @@ std::unique_ptr<TopoDS_Shape> transform_scale(
 std::unique_ptr<TopoDS_Shape> transform_mirror(
     const TopoDS_Shape& shape,
     double ox, double oy, double oz,
-    double nx, double ny, double nz)
+    double nx, double ny, double nz,
+    HistoryData& out_topology_history)
 {
     try {
         gp_Trsf trsf;
         trsf.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
         BRepBuilderAPI_Transform transform(shape, trsf, true);
-        return std::make_unique<TopoDS_Shape>(transform.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(transform.Shape());
+        const HistoryMaps result_maps(*result);
+        append_builder_topology_history(transform, shape, 0, result_maps,
+            out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure&) {
         return nullptr;
     }
@@ -1854,10 +1866,12 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
 // Edges → Wire → Face → Prism (solid).
 std::unique_ptr<TopoDS_Shape> make_extrude(
     const std::vector<TopoDS_Edge>& profile_edges,
-    double dx, double dy, double dz)
+    double dx, double dy, double dz,
+    const CancellationToken& progress,
+    HistoryData& out_topology_history)
 {
     try {
-        if (profile_edges.empty()) return nullptr;
+        if (profile_edges.empty() || rust_progress_cancelled(progress)) return nullptr;
         BRepBuilderAPI_MakeWire wire_maker;
         for (const auto& e : profile_edges) wire_maker.Add(e);
         if (!wire_maker.IsDone()) return nullptr;
@@ -1865,9 +1879,38 @@ std::unique_ptr<TopoDS_Shape> make_extrude(
         if (!face_maker.IsDone()) return nullptr;
         gp_Vec dir(dx, dy, dz);
         BRepPrimAPI_MakePrism prism(face_maker.Face(), dir);
-        prism.Build();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        prism.Build(indicator->Start());
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!prism.IsDone()) return nullptr;
-        return std::make_unique<TopoDS_Shape>(prism.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(prism.Shape());
+        const HistoryMaps result_maps(*result);
+        append_builder_topology_history(prism, wire_maker.Wire(), 0,
+            result_maps, out_topology_history);
+        const HistoryMaps profile_maps(wire_maker.Wire());
+        const TopoDS_Shape first = prism.FirstShape();
+        const TopoDS_Shape last = prism.LastShape();
+        for (int index = 1; index <= profile_maps.edges.Extent(); ++index) {
+            append_history_relation(out_topology_history, result_maps, first,
+                HistoryRelation::Generated, 0, HistoryKind::Edge,
+                static_cast<uint32_t>(index - 1));
+            append_history_relation(out_topology_history, result_maps, last,
+                HistoryRelation::Generated, 0, HistoryKind::Edge,
+                static_cast<uint32_t>(index - 1));
+        }
+        for (HistoryKind kind : {HistoryKind::Edge, HistoryKind::Vertex}) {
+            const auto& sources = profile_maps.map(kind);
+            for (int index = 1; index <= sources.Extent(); ++index) {
+                append_history_relation(out_topology_history, result_maps,
+                    prism.FirstShape(sources(index)), HistoryRelation::Generated,
+                    0, kind, static_cast<uint32_t>(index - 1));
+                append_history_relation(out_topology_history, result_maps,
+                    prism.LastShape(sources(index)), HistoryRelation::Generated,
+                    0, kind, static_cast<uint32_t>(index - 1));
+            }
+        }
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure&) {
         return nullptr;
     }
@@ -1883,10 +1926,20 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
     const std::vector<TopoDS_Edge>& spine_edges,
     uint32_t orient,
     double ux, double uy, double uz,
-    const std::vector<TopoDS_Edge>& aux_spine_edges)
+    const std::vector<TopoDS_Edge>& aux_spine_edges,
+    const CancellationToken& progress,
+    HistoryData& out_topology_history)
 {
     try {
-        if (all_edges.empty() || spine_edges.empty()) return nullptr;
+        if (all_edges.empty() || spine_edges.empty()
+            || rust_progress_cancelled(progress)) return nullptr;
+
+        TopoDS_Compound profile_compound;
+        BRep_Builder profile_builder;
+        profile_builder.MakeCompound(profile_compound);
+        for (const auto& edge : all_edges) {
+            if (!edge.IsNull()) profile_builder.Add(profile_compound, edge);
+        }
 
         // Build the spine wire.
         BRepBuilderAPI_MakeWire spineMaker;
@@ -1895,6 +1948,7 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
         TopoDS_Wire spine = spineMaker.Wire();
 
         BRepOffsetAPI_MakePipeShell shell(spine);
+        shell.SetIsBuildHistory(true);
 
         // Configure trihedron law.
         switch (orient) {
@@ -1958,10 +2012,17 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
             shell.Add(wire_maker.Wire(), false, false);
         }
 
-        shell.Build();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        shell.Build(indicator->Start());
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!shell.IsDone()) return nullptr;
         if (!shell.MakeSolid()) return nullptr;
-        return std::make_unique<TopoDS_Shape>(shell.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(shell.Shape());
+        const HistoryMaps result_maps(*result);
+        append_builder_topology_history(shell, profile_compound, 0,
+            result_maps, out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure&) {
         return nullptr;
     }

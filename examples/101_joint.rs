@@ -11,7 +11,8 @@ fn main() -> Result<(), Error> {
 	let example_name = std::path::Path::new(file!()).file_stem().unwrap().to_str().unwrap();
 	let (inner, outer, height) = (8.1, 20., 60.0);
 	let base = part(inner, outer, height)?;
-	let parts = [base.clone(), base.clone().map(|s| s.rotate(DVec3::ZERO, DVec3::ONE, std::f64::consts::TAU / 3.0)), base.clone().map(|s| s.rotate(DVec3::ZERO, DVec3::ONE, std::f64::consts::TAU * 2.0 / 3.0))];
+	let copy = || -> [Solid; 3] { std::array::from_fn(|i| base[i].shared_copy()) };
+	let parts = [copy(), copy().map(|s| s.rotate(DVec3::ZERO, DVec3::ONE, std::f64::consts::TAU / 3.0)), copy().map(|s| s.rotate(DVec3::ZERO, DVec3::ONE, std::f64::consts::TAU * 2.0 / 3.0))];
 	// positive = 各 part の [outer, between] (= p[0], p[1]) を全部 union
 	let positive: Solid = parts.iter().flat_map(|p| [&p[0], &p[1]]).map(Boolean::from).reduce(|a, b| a + b).unwrap().build()?;
 	// negative = 各 part の inner cylinder (= p[2]) を全部 union

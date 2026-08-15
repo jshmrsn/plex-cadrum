@@ -27,7 +27,7 @@ fn chijin() -> Result<Solid, cadrum::Error> {
 	let cross_section = Edge::polygon(&[DVec3::new(0.0, 5.0, 0.0), DVec3::new(15.0, 5.0, 0.0), DVec3::new(17.0, 3.0, 0.0), DVec3::new(15.0, 4.0, 0.0), DVec3::new(0.0, 4.0, 0.0)])?;
 	let spine = Edge::circle(1.0, DVec3::Y)?;
 	let sheet = color_faces(Solid::sweep(&cross_section, &[spine], ProfileOrient::Up(DVec3::Y))?, "#fff");
-	let sheets = [sheet.clone().mirror(DVec3::ZERO, DVec3::Y), sheet];
+	let sheets = [sheet.shared_copy().mirror(DVec3::ZERO, DVec3::Y), sheet];
 
 	// ── Lacing blocks: 2x1x8, rotated 60° around Y, placed at z=15 ──────
 	let block_proto = Solid::cube(DVec3::ZERO, DVec3::new(2.0, 1.0, 8.0)).translate(DVec3::new(-1.0, -0.5, -4.0)).rotate_y(-60.0_f64.to_radians()).translate(DVec3::Z * 15.0);
@@ -40,8 +40,8 @@ fn chijin() -> Result<Solid, cadrum::Error> {
 	const N: usize = 20;
 	let angle = |i: usize| 2.0 * PI * (i as f64) / (N as f64);
 	let color = |i: usize| Color::from_hsv(i as f32 / N as f32, 1.0, 1.0);
-	let blocks: [Solid; N] = std::array::from_fn(|i| color_faces(block_proto.clone().rotate_y(-angle(i)), color(i)));
-	let holes: [Solid; N] = std::array::from_fn(|i| hole_proto.clone().rotate_y(-angle(i)));
+	let blocks: [Solid; N] = std::array::from_fn(|i| color_faces(block_proto.shared_copy().rotate_y(-angle(i)), color(i)));
+	let holes: [Solid; N] = std::array::from_fn(|i| hole_proto.shared_copy().rotate_y(-angle(i)));
 	// ── Assemble with boolean operations: union, subtract, union ─────────
 	let mut result: Solid = (&cylinder + &sheets[0] + &sheets[1]).build()?;
 	for i in 0..N {

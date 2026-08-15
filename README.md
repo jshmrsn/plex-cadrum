@@ -206,12 +206,12 @@ fn main() -> Result<(), cadrum::Error> {
 	let original = Solid::read_step(&mut std::fs::File::open(format!("{manifest_dir}/steps/colored_box.step")).expect("open file"))?;
 
 	// 1. STEP round-trip: rotate 30° → write → read
-	let a_written: Vec<Solid> = original.clone().into_iter().map(|s| s.rotate_x(FRAC_PI_8)).collect();
+	let a_written: Vec<Solid> = original.iter().map(Solid::shared_copy).map(|s| s.rotate_x(FRAC_PI_8)).collect();
 	Solid::write_step(&a_written, &mut std::fs::File::create(&step_path).expect("create file"))?;
 	let a = Solid::read_step(&mut std::fs::File::open(&step_path).expect("open file"))?;
 
 	// 2. BRep round-trip: rotate another 30° → write → read
-	let b_written: Vec<Solid> = a.clone().into_iter().map(|s| s.rotate_x(FRAC_PI_8)).collect();
+	let b_written: Vec<Solid> = a.iter().map(Solid::shared_copy).map(|s| s.rotate_x(FRAC_PI_8)).collect();
 	Solid::write_brep(&b_written, &mut std::fs::File::create(&brep_path).expect("create file"))?;
 	let b = Solid::read_brep(&mut std::fs::File::open(&brep_path).expect("open file"))?;
 
@@ -265,15 +265,15 @@ fn main() -> Result<(), cadrum::Error> {
 
 	let solids = [
 		// original — reference, no transform
-		base.clone(),
+		base.shared_copy(),
 		// translate — shift +20 along Z
-		base.clone().color("#4a90d9").translate(DVec3::X * 40.0 + DVec3::Z * 20.0),
+		base.shared_copy().color("#4a90d9").translate(DVec3::X * 40.0 + DVec3::Z * 20.0),
 		// rotate — 90° around X axis so the cone tips toward Y
-		base.clone().color("#e67e22").rotate_x(PI / 2.0).translate(DVec3::X * 80.0),
+		base.shared_copy().color("#e67e22").rotate_x(PI / 2.0).translate(DVec3::X * 80.0),
 		// scaled — 1.5x from its local origin
-		base.clone().color("#2ecc71").scale(DVec3::ZERO, 1.5).translate(DVec3::X * 120.0),
+		base.shared_copy().color("#2ecc71").scale(DVec3::ZERO, 1.5).translate(DVec3::X * 120.0),
 		// mirror — flip across Z=0 plane so the tip points down
-		base.clone().color("#e74c3c").mirror(DVec3::ZERO, DVec3::Z).translate(DVec3::X * 160.0),
+		base.shared_copy().color("#e74c3c").mirror(DVec3::ZERO, DVec3::Z).translate(DVec3::X * 160.0),
 	];
 
 	Solid::write_step(&solids, &mut std::fs::File::create(format!("{example_name}.step")).unwrap())?;
@@ -324,7 +324,7 @@ fn main() -> Result<(), cadrum::Error> {
 	let intersect: Solid = (&make_box * &make_cyl).build()?;
 
 	let cylinder = Solid::cylinder(8.0, DVec3::Z * 30.0).translate(DVec3::X * 4.);
-	let [cylinder0, cylinder1, cylinder2] = [cylinder.clone(), cylinder.clone().rotate_z(std::f64::consts::TAU / 3.), cylinder.clone().rotate_z(-std::f64::consts::TAU / 3.)];
+	let [cylinder0, cylinder1, cylinder2] = [cylinder.shared_copy(), cylinder.shared_copy().rotate_z(std::f64::consts::TAU / 3.), cylinder.shared_copy().rotate_z(-std::f64::consts::TAU / 3.)];
 
 	// union of all cylinders (fold from Boolean::default() = ⊥)
 	let sum: Solid = [&cylinder0, &cylinder1, &cylinder2].into_iter().map(Boolean::from).reduce(|a, s| a + s).unwrap().build()?;

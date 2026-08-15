@@ -18,7 +18,7 @@ fn main() -> Result<(), cadrum::Error> {
 	let intersect: Solid = (&make_box * &make_cyl).build()?;
 
 	let cylinder = Solid::cylinder(8.0, DVec3::Z * 30.0).translate(DVec3::X * 4.);
-	let [cylinder0, cylinder1, cylinder2] = [cylinder.clone(), cylinder.clone().rotate_z(std::f64::consts::TAU / 3.), cylinder.clone().rotate_z(-std::f64::consts::TAU / 3.)];
+	let [cylinder0, cylinder1, cylinder2] = [cylinder.shared_copy(), cylinder.shared_copy().rotate_z(std::f64::consts::TAU / 3.), cylinder.shared_copy().rotate_z(-std::f64::consts::TAU / 3.)];
 
 	// union of all cylinders (fold from Boolean::default() = ⊥)
 	let sum: Solid = [&cylinder0, &cylinder1, &cylinder2].into_iter().map(Boolean::from).reduce(|a, s| a + s).unwrap().build()?;

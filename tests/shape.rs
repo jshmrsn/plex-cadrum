@@ -25,7 +25,7 @@ fn test_union_of_translated_overlapping_solids_has_single_volume() {
 	// 結果のvolumeは1つ分（1000）になるはず。
 	let a = [Solid::cube(DVec3::ZERO, DVec3::splat(10.0))];
 	let b = [Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).translate(dvec3(100.0, 0.0, 0.0))];
-	let b_moved: Vec<Solid> = b.clone().into_iter().map(|s| s.translate(dvec3(-100.0, 0.0, 0.0))).collect();
+	let b_moved: Vec<Solid> = b.iter().map(Solid::shared_copy).map(|s| s.translate(dvec3(-100.0, 0.0, 0.0))).collect();
 
 	// b と b_moved は実態が別であることを確認: a と b（移動前）を union するとvolumeは2つ分（2000）。
 	let result_no_move: Vec<Solid> = (&a[0] + &b[0]).build_vec().expect("union should succeed");

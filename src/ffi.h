@@ -165,11 +165,13 @@ std::unique_ptr<TopoDS_Shape> transform_rotate(
 std::unique_ptr<TopoDS_Shape> transform_scale(
     const TopoDS_Shape& shape,
     double cx, double cy, double cz,
-    double factor);
+    double factor,
+    HistoryData& out_topology_history);
 std::unique_ptr<TopoDS_Shape> transform_mirror(
     const TopoDS_Shape& shape,
     double ox, double oy, double oz,
-    double nx, double ny, double nz);
+    double nx, double ny, double nz,
+    HistoryData& out_topology_history);
 
 // ==================== Shape Queries ====================
 
@@ -333,7 +335,9 @@ std::unique_ptr<TopoDS_Edge> mirror_edge(
 // Internally builds Wire → Face → Prism.
 std::unique_ptr<TopoDS_Shape> make_extrude(
     const std::vector<TopoDS_Edge>& profile_edges,
-    double dx, double dy, double dz);
+    double dx, double dy, double dz,
+	const CancellationToken& progress,
+    HistoryData& out_topology_history);
 
 // Sweep a closed profile wire (built from `profile_edges`) along a spine
 // wire (built from `spine_edges`) using BRepOffsetAPI_MakePipeShell. The
@@ -353,7 +357,9 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
     const std::vector<TopoDS_Edge>& spine_edges,
     uint32_t orient,
     double ux, double uy, double uz,
-    const std::vector<TopoDS_Edge>& aux_spine_edges);
+    const std::vector<TopoDS_Edge>& aux_spine_edges,
+	const CancellationToken& progress,
+	HistoryData& out_topology_history);
 
 // Helpers for the Rust side to construct a std::vector<TopoDS_Edge>.
 std::unique_ptr<std::vector<TopoDS_Edge>> edge_vec_new();

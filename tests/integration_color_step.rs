@@ -69,7 +69,7 @@ fn ops_on_a_colored_step_preserve_colors() {
 	let shape = read_colored_box();
 	let original_len = colormap_len(&shape);
 
-	let translated: Vec<Solid> = shape.iter().map(|s| s.clone().translate(DVec3::X * 100.0)).collect();
+	let translated: Vec<Solid> = shape.iter().map(Solid::shared_copy).map(|s| s.translate(DVec3::X * 100.0)).collect();
 	let cleaned: Vec<Solid> = shape.iter().map(|s| s.clean().expect("clean should succeed")).collect();
 	for (name, solids) in [("translated", translated), ("cleaned", cleaned)] {
 		assert_eq!(colormap_len(&solids), original_len, "{name} should preserve all {original_len} colors");
@@ -185,7 +185,7 @@ fn single_source_ops_carry_the_solid_color() {
 		let e = c.iter_edge().next().expect("cube has edges");
 		c.fillet_edges(0.5, [e]).expect("fillet should succeed")
 	};
-	let cases: Vec<(&str, Solid)> = vec![("translate", cube().translate(DVec3::X * 5.0)), ("clone", cube().clone()), ("fillet", filleted)];
+	let cases: Vec<(&str, Solid)> = vec![("translate", cube().translate(DVec3::X * 5.0)), ("shared copy", cube().shared_copy()), ("fillet", filleted)];
 
 	for (name, solid) in cases {
 		assert_eq!(solid.colormap().get(&solid.id()).copied(), Some(red), "{name} must carry the solid colour across");

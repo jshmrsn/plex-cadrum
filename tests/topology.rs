@@ -1,4 +1,4 @@
-use cadrum::{Boolean, DVec3, Solid, Tessellation, TopologyKind, TopologyRelationKind};
+use cadrum::{Boolean, DVec3, ProfileOrient, Solid, Tessellation, TopologyKind, TopologyRelationKind};
 
 #[test]
 fn cube_topology_snapshot_is_bidirectionally_consistent() {
@@ -43,6 +43,25 @@ fn fillet_reports_edge_generated_faces_and_complete_entity_kinds() {
 }
 
 #[test]
+fn extrusion_reports_profile_generated_caps_sides_edges_and_vertices() {
+	let profile = cadrum::Edge::polygon(&[DVec3::new(-5.0, -5.0, 0.0), DVec3::new(5.0, -5.0, 0.0), DVec3::new(5.0, 5.0, 0.0), DVec3::new(-5.0, 5.0, 0.0)]).expect("profile");
+	let extrusion = Solid::extrude(&profile, DVec3::Z * 10.0).expect("extrude");
+	let history = extrusion.topology_history();
+	assert!(history.unresolved().is_empty(), "unresolved: {:?}; relations: {:?}", history.unresolved(), history.relations());
+	assert!(history.relations().iter().any(|relation| { relation.result.kind == TopologyKind::Face && relation.relation == TopologyRelationKind::Generated && relation.source.kind == TopologyKind::Edge }));
+	assert!(history.relations().iter().any(|relation| relation.result.kind == TopologyKind::Edge));
+	assert!(history.relations().iter().any(|relation| relation.result.kind == TopologyKind::Vertex));
+}
+
+#[test]
+fn sweep_reports_profile_generated_topology() {
+	let profile = cadrum::Edge::polygon(&[DVec3::new(-2.0, -2.0, 0.0), DVec3::new(2.0, -2.0, 0.0), DVec3::new(2.0, 2.0, 0.0), DVec3::new(-2.0, 2.0, 0.0)]).expect("profile");
+	let spine = cadrum::Edge::line(DVec3::ZERO, DVec3::Z * 10.0).expect("spine");
+	let swept = Solid::sweep(&profile, [&spine], ProfileOrient::Fixed).expect("sweep");
+	assert!(swept.topology_history().relations().iter().any(|relation| { relation.result.kind == TopologyKind::Face && relation.relation == TopologyRelationKind::Generated && relation.source.kind == TopologyKind::Edge }));
+}
+
+#[test]
 fn decomposed_boolean_history_is_result_local_and_operand_aware() {
 	let left = Solid::cube(DVec3::ZERO, DVec3::splat(1.0));
 	let right = Solid::cube(DVec3::ZERO, DVec3::splat(1.0)).translate(DVec3::X * 4.0);
@@ -77,6 +96,19 @@ fn rigid_location_preserves_topology_tokens() {
 	let bounds = located.bounding_box();
 	assert!(bounds[0].distance(DVec3::new(10.0, 0.0, 0.0)) < 1.0e-6);
 	assert!(bounds[1].distance(DVec3::new(20.0, 10.0, 10.0)) < 1.0e-6);
+}
+
+#[test]
+fn scale_and_mirror_return_complete_topology_correspondence() {
+	let scaled = Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).scale(DVec3::ZERO, 2.0);
+	let scaled_topology = scaled.topology_snapshot().expect("scaled topology");
+	assert!(scaled.topology_history().unresolved().is_empty());
+	assert_eq!(scaled.topology_history().relations().len(), scaled_topology.face_ids().len() + scaled_topology.edge_ids().len() + scaled_topology.vertex_ids().len());
+
+	let mirrored = scaled.mirror(DVec3::ZERO, DVec3::X);
+	let mirrored_topology = mirrored.topology_snapshot().expect("mirrored topology");
+	assert!(mirrored.topology_history().unresolved().is_empty());
+	assert_eq!(mirrored.topology_history().relations().len(), mirrored_topology.face_ids().len() + mirrored_topology.edge_ids().len() + mirrored_topology.vertex_ids().len());
 }
 
 #[test]

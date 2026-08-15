@@ -66,7 +66,7 @@ fn trailer_begins_where_the_payload_ends() {
 	let cube = Solid::cube(DVec3::ZERO, DVec3::ONE);
 
 	let mut plain = Vec::new();
-	cadrum::Solid::write_brep(&[cube.clone()], &mut plain).expect("write_brep should succeed");
+	cadrum::Solid::write_brep([&cube], &mut plain).expect("write_brep should succeed");
 	let mut tinted = Vec::new();
 	cadrum::Solid::write_brep(&[cube.color(red)], &mut tinted).expect("write_brep should succeed");
 

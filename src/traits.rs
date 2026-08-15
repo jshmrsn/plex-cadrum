@@ -465,7 +465,7 @@ pub trait FaceStruct: Sized {
 ///
 /// Associated types `Edge`/`Face` keep this trait backend-independent: each
 /// backend (occt / pure) binds them to its own concrete types in the impl.
-pub trait SolidStruct: Sized + Clone + Transform {
+pub trait SolidStruct: Sized + Transform {
 	type Edge: EdgeStruct;
 	type Face: FaceStruct;
 
