@@ -13,7 +13,7 @@ pub mod occt;
 pub use occt::{
 	edge::Edge,
 	face::Face,
-	solid::{CurveGeometryKind, EdgeBlendKind, EdgeBlendSession, EdgeTopologyFacts, ExtrusionSession, FaceEditSession, FaceTopologyFacts, InputTopology, ResultTopology, Solid, SurfaceGeometryKind, SweepSession, TopologyHistory, TopologyKind, TopologyOccurrenceToken, TopologyQueryOptions, TopologyRelation, TopologyRelationKind, TopologySnapshot, ValidationReport, VertexTopologyFacts},
+	solid::{CurveGeometryKind, EdgeBlendKind, EdgeBlendSession, EdgeTopologyFacts, ExtrusionSession, FaceEditSession, FaceTopologyFacts, InputTopology, ResultTopology, Solid, SurfaceGeometryKind, SweepSession, TopologyDistance, TopologyHistory, TopologyKind, TopologyOccurrenceToken, TopologyQueryOptions, TopologyRelation, TopologyRelationKind, TopologySnapshot, ValidationReport, VertexTopologyFacts},
 	CancellationToken,
 };
 pub(crate) mod traits;

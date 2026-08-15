@@ -28,6 +28,7 @@ struct MeshData;
 struct TopologyData;
 struct ValidationData;
 struct HistoryData;
+struct TopologyDistanceData;
 
 void clear_operation_diagnostic();
 OperationDiagnosticData take_operation_diagnostic();
@@ -77,6 +78,10 @@ std::unique_ptr<TopoDS_Shape> make_torus(
 
 std::unique_ptr<TopoDS_Shape> make_empty();
 std::unique_ptr<TopoDS_Shape> deep_copy(const TopoDS_Shape& shape);
+
+TopologyDistanceData topology_distance(
+    const TopoDS_Shape& first, uint32_t first_kind, uint32_t first_index,
+    const TopoDS_Shape& second, uint32_t second_kind, uint32_t second_index);
 
 // ==================== Builders (solid → solid with history) ====================
 //

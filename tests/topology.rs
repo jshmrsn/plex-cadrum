@@ -51,6 +51,18 @@ fn topology_snapshot_batches_occurrences_adjacency_and_query_facts() {
 }
 
 #[test]
+fn topology_distance_returns_exact_witness_points_without_meshing() {
+	let first = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let second = Solid::cube(DVec3::new(15.0, 0.0, 0.0), DVec3::new(25.0, 10.0, 10.0));
+	let first_face = first.iter_face().enumerate().max_by(|(_, left), (_, right)| left.project(DVec3::new(10.0, 5.0, 5.0)).expect("project first face").0.x.total_cmp(&right.project(DVec3::new(10.0, 5.0, 5.0)).expect("project first face").0.x)).expect("first face").0 as u32;
+	let second_face = second.iter_face().enumerate().min_by(|(_, left), (_, right)| left.project(DVec3::new(15.0, 5.0, 5.0)).expect("project second face").0.x.total_cmp(&right.project(DVec3::new(15.0, 5.0, 5.0)).expect("project second face").0.x)).expect("second face").0 as u32;
+	let distance = first.topology_distance(cadrum::ResultTopology { kind: TopologyKind::Face, index: first_face }, &second, cadrum::ResultTopology { kind: TopologyKind::Face, index: second_face }).expect("face distance");
+	assert!((distance.distance - 5.0).abs() < 1.0e-9);
+	assert!((distance.first_point.x - 10.0).abs() < 1.0e-9);
+	assert!((distance.second_point.x - 15.0).abs() < 1.0e-9);
+}
+
+#[test]
 fn fillet_reports_edge_generated_faces_and_complete_entity_kinds() {
 	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	let edge = cube.iter_edge().next().expect("cube edge");

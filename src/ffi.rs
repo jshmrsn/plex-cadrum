@@ -64,6 +64,17 @@ mod ffi_bridge {
 		success: bool,
 	}
 
+	struct TopologyDistanceData {
+		distance: f64,
+		first_x: f64,
+		first_y: f64,
+		first_z: f64,
+		second_x: f64,
+		second_y: f64,
+		second_z: f64,
+		success: bool,
+	}
+
 	/// Operation-local topology correspondence returned by OCCT builders.
 	///
 	/// `relations` is encoded in chunks of six u32 values:
@@ -210,6 +221,7 @@ mod ffi_bridge {
 		fn shape_topology(shape: &TopoDS_Shape, query_flags: u32) -> TopologyData;
 		fn shape_validation(shape: &TopoDS_Shape) -> ValidationData;
 		fn shared_face_indices(first: &TopoDS_Shape, second: &TopoDS_Shape) -> Vec<u32>;
+		fn topology_distance(first: &TopoDS_Shape, first_kind: u32, first_index: u32, second: &TopoDS_Shape, second_kind: u32, second_index: u32) -> TopologyDistanceData;
 
 		fn clone_shape_handle(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 		fn clone_edge_handle(edge: &TopoDS_Edge) -> UniquePtr<TopoDS_Edge>;

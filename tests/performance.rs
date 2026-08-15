@@ -1,6 +1,6 @@
 use std::{hint::black_box, time::Instant};
 
-use cadrum::{DVec3, Solid, Tessellation, TopologyQueryOptions};
+use cadrum::{DVec3, ResultTopology, Solid, Tessellation, TopologyKind, TopologyQueryOptions};
 
 const SAMPLES: usize = 15;
 
@@ -31,6 +31,7 @@ fn exact_operation_stage_baseline() {
 	benchmark("prepared_fillet_build_and_history", || blend.update(cadrum::EdgeBlendKind::Fillet, 2.0, &cancellation).expect("fillet"));
 	benchmark("topology_adjacency", || source.topology_snapshot().expect("topology"));
 	benchmark("topology_measurement_facts", || source.topology_snapshot_with_options(TopologyQueryOptions::MEASUREMENT).expect("topology facts"));
+	benchmark("topology_exact_distance", || source.topology_distance(ResultTopology { kind: TopologyKind::Face, index: 0 }, &source, ResultTopology { kind: TopologyKind::Face, index: 1 }).expect("exact distance"));
 	benchmark("brepcheck_validation", || source.validate().expect("validation"));
 	benchmark("mass_properties", || (source.volume(), source.area(), source.center(), source.inertia()));
 

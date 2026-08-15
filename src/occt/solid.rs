@@ -123,6 +123,14 @@ pub struct ValidationReport {
 	pub invalid_vertices: u32,
 }
 
+/// Exact minimum distance and witness points between two topology entities.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TopologyDistance {
+	pub distance: f64,
+	pub first_point: DVec3,
+	pub second_point: DVec3,
+}
+
 /// The dimension of an artifact-local topology entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TopologyKind {
@@ -487,6 +495,21 @@ impl Solid {
 	/// Query occurrence-aware topology plus the requested immutable facts in one traversal.
 	pub fn topology_snapshot_with_options(&self, options: TopologyQueryOptions) -> Result<TopologySnapshot, Error> {
 		topology_snapshot_from_shape_with_options(&self.inner, options)
+	}
+
+	/// Return the exact closest points between two artifact-local entities.
+	pub fn topology_distance(&self, first: ResultTopology, other: &Self, second: ResultTopology) -> Result<TopologyDistance, Error> {
+		let kind = |value| match value {
+			TopologyKind::Face => 0,
+			TopologyKind::Edge => 1,
+			TopologyKind::Vertex => 2,
+		};
+		ffi::begin_operation();
+		let result = ffi::topology_distance(&self.inner, kind(first.kind), first.index, &other.inner, kind(second.kind), second.index);
+		if !result.success {
+			return Err(ffi::operation_error(Error::TopologyQueryFailed, "topology distance", "native"));
+		}
+		Ok(TopologyDistance { distance: result.distance, first_point: DVec3::new(result.first_x, result.first_y, result.first_z), second_point: DVec3::new(result.second_x, result.second_y, result.second_z) })
 	}
 
 	/// Run OCCT's exact B-rep analyzer and report invalid subshape counts.

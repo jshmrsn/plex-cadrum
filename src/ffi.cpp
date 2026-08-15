@@ -48,6 +48,7 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepExtrema_ExtPF.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -290,6 +291,71 @@ std::unique_ptr<TopoDS_Shape> make_empty() {
 std::unique_ptr<TopoDS_Shape> deep_copy(const TopoDS_Shape& shape) {
     BRepBuilderAPI_Copy copier(shape, true, false);
     return std::make_unique<TopoDS_Shape>(copier.Shape());
+}
+
+static bool indexed_subshape(
+    const TopoDS_Shape& shape,
+    uint32_t kind,
+    uint32_t index,
+    TopoDS_Shape& result) {
+    TopAbs_ShapeEnum shape_kind;
+    switch (kind) {
+        case 0: shape_kind = TopAbs_FACE; break;
+        case 1: shape_kind = TopAbs_EDGE; break;
+        case 2: shape_kind = TopAbs_VERTEX; break;
+        default: return false;
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> shapes;
+    TopExp::MapShapes(shape, shape_kind, shapes);
+    if (index >= static_cast<uint32_t>(shapes.Extent())) return false;
+    result = shapes(static_cast<int>(index + 1));
+    return true;
+}
+
+TopologyDistanceData topology_distance(
+    const TopoDS_Shape& first,
+    uint32_t first_kind,
+    uint32_t first_index,
+    const TopoDS_Shape& second,
+    uint32_t second_kind,
+    uint32_t second_index) {
+    TopologyDistanceData result{};
+    try {
+        TopoDS_Shape first_entity;
+        TopoDS_Shape second_entity;
+        if (!indexed_subshape(first, first_kind, first_index, first_entity) ||
+            !indexed_subshape(second, second_kind, second_index, second_entity)) {
+            operation_diagnostic.operation = "topology_distance";
+            operation_diagnostic.stage = "resolve_inputs";
+            operation_diagnostic.message = "topology entity index is outside the source shape";
+            operation_diagnostic.category = 2;
+            operation_diagnostic.present = true;
+            return result;
+        }
+        BRepExtrema_DistShapeShape extrema(first_entity, second_entity);
+        extrema.Perform();
+        if (!extrema.IsDone() || extrema.NbSolution() < 1) {
+            operation_diagnostic.operation = "topology_distance";
+            operation_diagnostic.stage = "native";
+            operation_diagnostic.message = "OCCT found no minimum-distance solution";
+            operation_diagnostic.category = 3;
+            operation_diagnostic.present = true;
+            return result;
+        }
+        const gp_Pnt first_point = extrema.PointOnShape1(1);
+        const gp_Pnt second_point = extrema.PointOnShape2(1);
+        result.distance = extrema.Value();
+        result.first_x = first_point.X();
+        result.first_y = first_point.Y();
+        result.first_z = first_point.Z();
+        result.second_x = second_point.X();
+        result.second_y = second_point.Y();
+        result.second_z = second_point.Z();
+        result.success = std::isfinite(result.distance) && result.distance >= 0.0;
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+    }
+    return result;
 }
 
 // ==================== STEP read post-processing ====================
