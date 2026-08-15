@@ -117,9 +117,11 @@
 #include <cstring>
 #include <cstdint>
 #include <algorithm>
+#include <initializer_list>
 #include <unordered_map>
 #include <unordered_set>
 #include <array>
+#include <vector>
 
 namespace cadrum {
 
@@ -691,6 +693,104 @@ static void append_identity_topology_history(
                 static_cast<uint32_t>(ordinal - 1));
         }
     }
+}
+
+// Complete operation history only through exact occurrence identity. Unlike
+// append_identity_topology_history this never assumes that traversal ordinals
+// correspond, so it is safe for builders that reorder or insert topology.
+static void append_shared_topology_history(
+    const TopoDS_Shape& input,
+    uint32_t operand,
+    const HistoryMaps& result_maps,
+    HistoryData& out)
+{
+    const HistoryMaps input_maps(input);
+    for (HistoryKind kind : {HistoryKind::Face, HistoryKind::Edge, HistoryKind::Vertex}) {
+        const auto& inputs = input_maps.map(kind);
+        for (int ordinal = 1; ordinal <= inputs.Extent(); ++ordinal) {
+            const TopoDS_Shape& source = inputs(ordinal);
+            if (result_maps.map(kind).FindIndex(source) <= 0) continue;
+            append_history_relation(out, result_maps, source,
+                HistoryRelation::Unchanged, operand, kind,
+                static_cast<uint32_t>(ordinal - 1));
+        }
+    }
+}
+
+static bool result_has_topology_relation(
+    const HistoryData& out,
+    HistoryKind result_kind,
+    uint32_t result_index)
+{
+    const uint32_t kind_value = static_cast<uint32_t>(result_kind);
+    for (size_t offset = 0; offset + 5 < out.relations.size(); offset += 6) {
+        if (out.relations[offset] == kind_value
+            && out.relations[offset + 1] == result_index) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Some OCCT builders intentionally expose only partial per-subshape history.
+// For topology they do not classify, record the explicit operation-level
+// generator set rather than guessing a one-to-one relationship by traversal
+// order. Consumers can resolve the truthful many-to-many relation with their
+// geometric and adjacency discriminators.
+static void append_aggregate_generated_history(
+    const TopoDS_Shape& input,
+    uint32_t operand,
+    const HistoryMaps& result_maps,
+    HistoryKind result_kind,
+    std::initializer_list<HistoryKind> source_kinds,
+    HistoryData& out)
+{
+    const HistoryMaps input_maps(input);
+    const auto& results = result_maps.map(result_kind);
+    for (int result_ordinal = 1; result_ordinal <= results.Extent(); ++result_ordinal) {
+        const uint32_t result_index = static_cast<uint32_t>(result_ordinal - 1);
+        if (result_has_topology_relation(out, result_kind, result_index)) continue;
+        for (HistoryKind source_kind : source_kinds) {
+            const auto& sources = input_maps.map(source_kind);
+            for (int source_ordinal = 1; source_ordinal <= sources.Extent(); ++source_ordinal) {
+                append_history_relation(out, result_maps, results(result_ordinal),
+                    HistoryRelation::Generated, operand, source_kind,
+                    static_cast<uint32_t>(source_ordinal - 1));
+            }
+        }
+    }
+}
+
+// Builder APIs can report a source as deleted while omitting the generated
+// result that an operation-level fallback subsequently relates to it. A
+// related source is not deleted in Plex's semantic history, so remove those
+// contradictory tombstones before publishing the result.
+static void remove_related_deleted_topology(HistoryData& out) {
+    std::vector<uint32_t> retained;
+    retained.reserve(out.deleted.size());
+    for (size_t deleted_offset = 0; deleted_offset + 2 < out.deleted.size(); deleted_offset += 3) {
+        const uint32_t operand = out.deleted[deleted_offset];
+        const uint32_t source_kind = out.deleted[deleted_offset + 1];
+        const uint32_t source_index = out.deleted[deleted_offset + 2];
+        bool related = false;
+        for (size_t relation_offset = 0;
+             relation_offset + 5 < out.relations.size();
+             relation_offset += 6) {
+            if (out.relations[relation_offset + 3] == operand
+                && out.relations[relation_offset + 4] == source_kind
+                && out.relations[relation_offset + 5] == source_index) {
+                related = true;
+                break;
+            }
+        }
+        if (!related) {
+            retained.push_back(operand);
+            retained.push_back(source_kind);
+            retained.push_back(source_index);
+        }
+    }
+    out.deleted.clear();
+    for (uint32_t value : retained) out.deleted.push_back(value);
 }
 
 static void finish_topology_history(const HistoryMaps& result_maps, HistoryData& out) {
@@ -2110,6 +2210,15 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
         const HistoryMaps result_maps(*result);
         append_builder_topology_history(builder, solid, 0, result_maps,
             out_topology_history);
+        append_shared_topology_history(solid, 0, result_maps,
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Face, {HistoryKind::Face}, out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Edge, {HistoryKind::Edge}, out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Vertex, {HistoryKind::Vertex}, out_topology_history);
+        remove_related_deleted_topology(out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
     } catch (const Standard_Failure& failure) {
@@ -2390,6 +2499,16 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
         const HistoryMaps result_maps(*result);
         append_builder_topology_history(shell, profile_compound, 0,
             result_maps, out_topology_history);
+        append_shared_topology_history(profile_compound, 0, result_maps,
+            out_topology_history);
+        append_aggregate_generated_history(profile_compound, 0, result_maps,
+            HistoryKind::Face, {HistoryKind::Edge}, out_topology_history);
+        append_aggregate_generated_history(profile_compound, 0, result_maps,
+            HistoryKind::Edge, {HistoryKind::Edge, HistoryKind::Vertex},
+            out_topology_history);
+        append_aggregate_generated_history(profile_compound, 0, result_maps,
+            HistoryKind::Vertex, {HistoryKind::Vertex}, out_topology_history);
+        remove_related_deleted_topology(out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
     } catch (const Standard_Failure& failure) {
