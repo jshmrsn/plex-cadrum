@@ -1141,6 +1141,7 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
         constexpr uint32_t FACT_DEGENERATE = 1U << 3;
         constexpr uint32_t FACT_SEAM = 1U << 4;
         constexpr uint32_t FACT_MANIFOLD = 1U << 5;
+        constexpr uint32_t FACT_DIRECTION = 1U << 6;
         const bool query_frames = (query_flags & QUERY_FRAMES) != 0;
         const bool query_measurements = (query_flags & QUERY_MEASUREMENTS) != 0;
         const bool query_geometry = (query_flags & QUERY_GEOMETRY) != 0;
@@ -1263,6 +1264,7 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                 uint32_t geometry_kind = 0;
                 gp_Pnt point(0.0, 0.0, 0.0);
                 gp_Vec tangent(0.0, 0.0, 0.0);
+                gp_Vec outward(0.0, 0.0, 0.0);
                 double length = 0.0;
                 BRepAdaptor_Curve curve(typed_edge);
                 if (query_geometry) {
@@ -1276,6 +1278,45 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                         if (tangent.SquareMagnitude() > Precision::SquareConfusion()) {
                             tangent.Normalize();
                             fact_flags |= FACT_FRAME;
+                        }
+                    }
+                    if ((fact_flags & FACT_FRAME) != 0) {
+                        for (uint32_t face_index : adjacent) {
+                            try {
+                                const TopoDS_Face face = TopoDS::Face(
+                                    faces(static_cast<int>(face_index + 1)));
+                                const TopoDS_Vertex probe =
+                                    BRepBuilderAPI_MakeVertex(point);
+                                BRepExtrema_ExtPF extrema(probe, face);
+                                if (!extrema.IsDone() || extrema.NbExt() < 1) continue;
+                                int nearest = 1;
+                                double nearest_distance = extrema.SquareDistance(1);
+                                for (int candidate = 2; candidate <= extrema.NbExt(); ++candidate) {
+                                    const double distance = extrema.SquareDistance(candidate);
+                                    if (distance < nearest_distance) {
+                                        nearest = candidate;
+                                        nearest_distance = distance;
+                                    }
+                                }
+                                double u = 0.0;
+                                double v = 0.0;
+                                extrema.Parameter(nearest, u, v);
+                                BRepAdaptor_Surface surface(face);
+                                BRepLProp_SLProps properties(
+                                    surface, u, v, 1, Precision::Confusion());
+                                if (!properties.IsNormalDefined()) continue;
+                                gp_Dir normal = properties.Normal();
+                                if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                                outward += gp_Vec(normal);
+                            } catch (const Standard_Failure&) {
+                                // A single singular adjacent surface does not invalidate the
+                                // topology snapshot; other adjacent normals may still define a
+                                // stable drag direction.
+                            }
+                        }
+                        if (outward.SquareMagnitude() > Precision::SquareConfusion()) {
+                            outward.Normalize();
+                            fact_flags |= FACT_DIRECTION;
                         }
                     }
                 }
@@ -1293,6 +1334,9 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                 result.edge_tangents.push_back(tangent.X());
                 result.edge_tangents.push_back(tangent.Y());
                 result.edge_tangents.push_back(tangent.Z());
+                result.edge_directions.push_back(outward.X());
+                result.edge_directions.push_back(outward.Y());
+                result.edge_directions.push_back(outward.Z());
                 result.edge_lengths.push_back(length);
             }
         }

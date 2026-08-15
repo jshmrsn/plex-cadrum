@@ -38,6 +38,7 @@ fn topology_snapshot_batches_occurrences_adjacency_and_query_facts() {
 		assert_eq!(facts.token.ordinal, edge);
 		assert_eq!(facts.geometry, Some(CurveGeometryKind::Line));
 		assert_eq!(facts.vertices.len(), 2);
+		assert!(facts.outward_direction.expect("edge outward direction").into_iter().all(f64::is_finite));
 		assert!(facts.manifold);
 		assert!(!facts.seam);
 		assert!((facts.length.expect("edge length") - 10.0).abs() < 1.0e-8);

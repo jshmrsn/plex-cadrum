@@ -277,6 +277,7 @@ pub struct EdgeTopologyFacts {
 	pub geometry: Option<CurveGeometryKind>,
 	pub midpoint: Option<[f64; 3]>,
 	pub tangent: Option<[f64; 3]>,
+	pub outward_direction: Option<[f64; 3]>,
 	pub length: Option<f64>,
 	pub vertices: Vec<u32>,
 	pub closed: bool,
@@ -783,7 +784,7 @@ fn decode_face_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken
 
 fn decode_edge_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken], edge_vertices: &[Vec<u32>], options: TopologyQueryOptions) -> Result<Vec<EdgeTopologyFacts>, Error> {
 	let count = tokens.len();
-	if (options.frames || options.measurements || options.geometry) && (data.edge_geometry_kinds.len() != count || data.edge_fact_flags.len() != count || data.edge_points.len() != count * 3 || data.edge_tangents.len() != count * 3 || data.edge_lengths.len() != count) {
+	if (options.frames || options.measurements || options.geometry) && (data.edge_geometry_kinds.len() != count || data.edge_fact_flags.len() != count || data.edge_points.len() != count * 3 || data.edge_tangents.len() != count * 3 || data.edge_directions.len() != count * 3 || data.edge_lengths.len() != count) {
 		return Err(Error::TopologyQueryFailed);
 	}
 	tokens
@@ -796,6 +797,7 @@ fn decode_edge_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken
 				geometry: data.edge_geometry_kinds.get(index).copied().map(decode_curve_kind).transpose()?.flatten(),
 				midpoint: ((flags & 1) != 0).then(|| decode_point(&data.edge_points, index)).transpose()?,
 				tangent: ((flags & 1) != 0).then(|| decode_point(&data.edge_tangents, index)).transpose()?,
+				outward_direction: ((flags & 64) != 0).then(|| decode_point(&data.edge_directions, index)).transpose()?,
 				length: ((flags & 2) != 0).then(|| data.edge_lengths[index]),
 				vertices: edge_vertices[index].clone(),
 				closed: (flags & 4) != 0,

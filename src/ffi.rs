@@ -49,6 +49,7 @@ mod ffi_bridge {
 		edge_fact_flags: Vec<u32>,
 		edge_points: Vec<f64>,
 		edge_tangents: Vec<f64>,
+		edge_directions: Vec<f64>,
 		edge_lengths: Vec<f64>,
 		vertex_fact_flags: Vec<u32>,
 		vertex_points: Vec<f64>,
