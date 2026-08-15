@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadrum::{Boolean, CurveGeometryKind, DVec3, ProfileOrient, Solid, SurfaceGeometryKind, Tessellation, TopologyKind, TopologyQueryOptions, TopologyRelationKind};
 
@@ -218,6 +218,51 @@ fn keyed_mesh_chunks_cover_faces_and_ordered_edges() {
 	}
 	let selected = cube.mesh_face_chunks(&[1, 4], Tessellation::default()).expect("selected faces");
 	assert_eq!(selected.iter().map(|chunk| chunk.face_index).collect::<Vec<_>>(), [1, 4]);
+}
+
+#[test]
+fn fillet_surface_and_edges_share_one_watertight_triangulation() {
+	let cylinder = Solid::cylinder(10.0, DVec3::Z * 20.0);
+	let top_ring = cylinder
+		.iter_edge()
+		.find(|edge| {
+			let points = edge.approximation_segments(Tessellation::default());
+			points.len() >= 2 && points.iter().all(|point| (point.z - 20.0).abs() < 1.0e-8)
+		})
+		.expect("top cylinder ring");
+	let filleted = cylinder.fillet_edges(2.0, [top_ring]).expect("fillet top ring");
+	let options = Tessellation { deflection_linear: 0.004, deflection_angular: 0.2, relative_linear: true, include_edges: true, parallel: false };
+	let chunks = Solid::mesh_chunks([&filleted], options).expect("coherent fillet presentation");
+
+	let mut surface_segments = BTreeMap::new();
+	for face in &chunks.faces {
+		for triangle in face.indices.chunks_exact(3) {
+			for [first, second] in [[triangle[0], triangle[1]], [triangle[1], triangle[2]], [triangle[2], triangle[0]]] {
+				let key = segment_key(face.vertices[first as usize], face.vertices[second as usize]);
+				if key[0] != key[1] {
+					*surface_segments.entry(key).or_insert(0_usize) += 1;
+				}
+			}
+		}
+	}
+	assert!(surface_segments.values().all(|occurrences| occurrences.is_multiple_of(2)), "every closed-solid surface segment must have a coincident mate");
+	for edge in &chunks.edges {
+		for segment in edge.points.windows(2) {
+			let key = segment_key(segment[0], segment[1]);
+			assert!(surface_segments.get(&key).is_some_and(|occurrences| occurrences.is_multiple_of(2)), "edge {} segment {segment:?} must use the surface triangulation's exact boundary nodes", edge.edge_index);
+		}
+	}
+}
+
+fn segment_key(first: DVec3, second: DVec3) -> [[i64; 3]; 2] {
+	let quantize = |point: DVec3| point.to_array().map(|component| (component * 1.0e9).round() as i64);
+	let first = quantize(first);
+	let second = quantize(second);
+	if first <= second {
+		[first, second]
+	} else {
+		[second, first]
+	}
 }
 
 #[test]

@@ -212,7 +212,7 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	let compound = CompoundShape::new(solids);
 	let progress = ffi::CancellationToken::new();
 	ffi::begin_operation();
-	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, &progress);
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, options.include_edges, &progress);
 	if !data.success {
 		return Err(ffi::operation_error(Error::TriangulationFailed, "mesh shape", "mesh"));
 	}
@@ -220,26 +220,18 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	let vertices: Vec<DVec3> = (0..vertex_count).map(|i| DVec3::new(data.vertices[i * 3], data.vertices[i * 3 + 1], data.vertices[i * 3 + 2])).collect();
 	let normals: Vec<DVec3> = (0..vertex_count).map(|i| DVec3::new(data.normals[i * 3], data.normals[i * 3 + 1], data.normals[i * 3 + 2])).collect();
 	let indices: Vec<usize> = data.indices.iter().map(|&i| i as usize).collect();
+	let edge_chunks = decode_edge_chunks(&data, options.include_edges)?;
 	let face_ids = data.face_tshape_ids;
 
-	// Topological edge polylines, NaN-separated. Reuses the existing edge
-	// discretizer (GCPnts_TangentialDeflection). `relative_linear` applies to
-	// surface triangulation only; edges use `deflection_linear` as an absolute
-	// chord here.
+	// Topological edge polylines, NaN-separated. These are read from the same
+	// OCCT polygons-on-triangulation as the surface mesh, so outlines cannot
+	// acquire a different segment count or phase from adjacent face boundaries.
 	let mut edges: Vec<DVec3> = Vec::new();
-	if options.include_edges {
-		for e in ffi::shape_edges(compound.inner()).iter() {
-			let segs = ffi::edge_approximation_segments(e, options.deflection_linear, options.deflection_angular, options.relative_linear);
-			if segs.len() < 6 {
-				continue;
-			}
-			if !edges.is_empty() {
-				edges.push(DVec3::NAN);
-			}
-			for c in segs.chunks_exact(3) {
-				edges.push(DVec3::new(c[0], c[1], c[2]));
-			}
+	for edge in edge_chunks {
+		if !edges.is_empty() {
+			edges.push(DVec3::NAN);
 		}
+		edges.extend(edge.points);
 	}
 
 	#[cfg(feature = "color")]
@@ -272,11 +264,11 @@ pub(super) fn mesh_chunks_cancelable<'a>(solids: impl IntoIterator<Item = &'a So
 	let solids = solids.into_iter().collect::<Vec<_>>();
 	let compound = CompoundShape::new(solids.iter().copied());
 	ffi::begin_operation();
-	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, progress);
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, options.include_edges, progress);
 	if progress.is_cancelled() {
 		return Err(Error::Cancelled);
 	}
-	decode_mesh_chunks(compound.inner(), data, options)
+	decode_mesh_chunks(data, options)
 }
 
 pub(super) fn mesh_face_chunks(solid: &Solid, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
@@ -289,7 +281,7 @@ pub(super) fn mesh_face_chunks_cancelable(solid: &Solid, face_indices: &[u32], o
 	if progress.is_cancelled() {
 		return Err(Error::Cancelled);
 	}
-	Ok(decode_mesh_chunks(solid.inner(), data, crate::traits::Tessellation { include_edges: false, ..options })?.faces)
+	Ok(decode_mesh_chunks(data, crate::traits::Tessellation { include_edges: false, ..options })?.faces)
 }
 
 pub(super) fn edge_polyline_chunks(solid: &Solid, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
@@ -297,27 +289,39 @@ pub(super) fn edge_polyline_chunks(solid: &Solid, options: crate::traits::Tessel
 }
 
 pub(super) fn edge_polyline_chunks_cancelable(solid: &Solid, options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
+	let presentation = solid.presentation_copy()?;
+	mesh_chunks_cancelable([&presentation], crate::traits::Tessellation { include_edges: true, ..options }, progress).map(|chunks| chunks.edges)
+}
+
+fn decode_edge_chunks(data: &ffi::MeshData, include_edges: bool) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
 	use crate::common::mesh::EdgePolylineChunk;
 	use glam::DVec3;
 
-	ffi::shape_edges(solid.inner())
+	if !include_edges {
+		return Ok(Vec::new());
+	}
+	let edge_count = data.chunk_edge_indices.len();
+	if !data.edge_points.len().is_multiple_of(3) || data.edge_point_offsets.len() != edge_count + 1 || data.edge_point_offsets.first() != Some(&0) {
+		return Err(Error::TriangulationFailed);
+	}
+	let points = data.edge_points.chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
+	data.chunk_edge_indices
 		.iter()
+		.copied()
 		.enumerate()
-		.map(|(edge_index, edge)| {
-			if progress.is_cancelled() {
-				return Err(Error::Cancelled);
-			}
-			let points = ffi::edge_approximation_segments(edge, options.deflection_linear, options.deflection_angular, options.relative_linear).chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
-			if points.len() < 2 {
+		.map(|(ordinal, edge_index)| {
+			let start = data.edge_point_offsets[ordinal] as usize;
+			let end = data.edge_point_offsets[ordinal + 1] as usize;
+			if start > end || end > points.len() || end - start < 2 {
 				return Err(Error::TriangulationFailed);
 			}
-			Ok(EdgePolylineChunk { edge_index: u32::try_from(edge_index).map_err(|_| Error::TriangulationFailed)?, points })
+			Ok(EdgePolylineChunk { edge_index, points: points[start..end].to_vec() })
 		})
 		.collect()
 }
 
-fn decode_mesh_chunks(shape: &ffi::TopoDS_Shape, data: ffi::MeshData, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
-	use crate::common::mesh::{EdgePolylineChunk, FaceMeshChunk, MeshChunks};
+fn decode_mesh_chunks(data: ffi::MeshData, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
+	use crate::common::mesh::{FaceMeshChunk, MeshChunks};
 	use glam::DVec3;
 
 	let face_count = data.chunk_face_tshape_ids.len();
@@ -343,14 +347,6 @@ fn decode_mesh_chunks(shape: &ffi::TopoDS_Shape, data: ffi::MeshData, options: c
 		});
 	}
 
-	let mut edges = Vec::new();
-	if options.include_edges {
-		for (edge_index, edge) in ffi::shape_edges(shape).iter().enumerate() {
-			let points = ffi::edge_approximation_segments(edge, options.deflection_linear, options.deflection_angular, options.relative_linear).chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
-			if points.len() >= 2 {
-				edges.push(EdgePolylineChunk { edge_index: u32::try_from(edge_index).map_err(|_| Error::TriangulationFailed)?, points });
-			}
-		}
-	}
+	let edges = decode_edge_chunks(&data, options.include_edges)?;
 	Ok(MeshChunks { faces, edges })
 }

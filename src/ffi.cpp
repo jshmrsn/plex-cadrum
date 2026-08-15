@@ -78,6 +78,7 @@
 // --- Mesh, classification, mass / surface properties ---
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <IMeshTools_Parameters.hxx>
+#include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
@@ -1317,13 +1318,47 @@ static IMeshTools_Parameters mesh_parameters(
     return parameters;
 }
 
+static bool append_edge_mesh(
+    const TopoDS_Edge& edge,
+    uint32_t edge_index,
+    MeshData& result)
+{
+    Handle(Poly_PolygonOnTriangulation) polygon;
+    Handle(Poly_Triangulation) triangulation;
+    TopLoc_Location location;
+    BRep_Tool::PolygonOnTriangulation(
+        edge, polygon, triangulation, location);
+    if (polygon.IsNull() || triangulation.IsNull() ||
+        polygon->NbNodes() < 2) {
+        return false;
+    }
+
+    result.chunk_edge_indices.push_back(edge_index);
+    const auto& nodes = polygon->Nodes();
+    const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+    for (int ordinal = nodes.Lower(); ordinal <= nodes.Upper(); ++ordinal) {
+        const int index = reversed
+            ? nodes(nodes.Upper() - (ordinal - nodes.Lower()))
+            : nodes(ordinal);
+        gp_Pnt point = triangulation->Node(index);
+        point.Transform(location.Transformation());
+        result.edge_points.push_back(point.X());
+        result.edge_points.push_back(point.Y());
+        result.edge_points.push_back(point.Z());
+    }
+    result.edge_point_offsets.push_back(
+        static_cast<uint32_t>(result.edge_points.size() / 3));
+    return true;
+}
+
 MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular,
-                    bool relative, bool parallel,
+                    bool relative, bool parallel, bool include_edges,
                     const CancellationToken& progress) {
     MeshData result;
     result.success = false;
     result.face_vertex_offsets.push_back(0);
     result.face_index_offsets.push_back(0);
+    result.edge_point_offsets.push_back(0);
     try {
         if (rust_progress_cancelled(progress)) return result;
         Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
@@ -1338,6 +1373,16 @@ MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular,
         for (int index = 1; index <= faces.Extent(); ++index) {
             append_face_mesh(TopoDS::Face(faces(index)),
                 static_cast<uint32_t>(index - 1), result);
+        }
+        if (include_edges) {
+            NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+            TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+            for (int index = 1; index <= edges.Extent(); ++index) {
+                if (!append_edge_mesh(TopoDS::Edge(edges(index)),
+                        static_cast<uint32_t>(index - 1), result)) {
+                    return result;
+                }
+            }
         }
         result.success = true;
     } catch (const Standard_Failure& failure) {
@@ -1360,23 +1405,27 @@ MeshData mesh_shape_faces(
     result.success = false;
     result.face_vertex_offsets.push_back(0);
     result.face_index_offsets.push_back(0);
+    result.edge_point_offsets.push_back(0);
     try {
         if (rust_progress_cancelled(progress)) return result;
+        BRepBuilderAPI_Copy copier(shape, true, false);
+        const TopoDS_Shape presentation_shape = copier.Shape();
+        if (presentation_shape.IsNull()) return result;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
-        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        TopExp::MapShapes(presentation_shape, TopAbs_FACE, faces);
         Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        BRepMesh_IncrementalMesh mesher(presentation_shape,
+            mesh_parameters(linear, angular, relative, parallel),
+            indicator->Start());
+        if (rust_progress_cancelled(progress)) return result;
+        if (!mesher.IsDone()) return result;
         for (uint32_t face_index : face_indices) {
             if (rust_progress_cancelled(progress)) return result;
             if (face_index >= static_cast<uint32_t>(faces.Extent())) return result;
-            BRepBuilderAPI_Copy copier(
-                faces(static_cast<int>(face_index + 1)), true, false);
-            const TopoDS_Face face = TopoDS::Face(copier.Shape());
-            BRepMesh_IncrementalMesh mesher(face,
-                mesh_parameters(linear, angular, relative, parallel),
-                indicator->Start());
-            if (rust_progress_cancelled(progress)) return result;
-            if (!mesher.IsDone()) return result;
-            append_face_mesh(face, face_index, result);
+            append_face_mesh(
+                TopoDS::Face(faces(static_cast<int>(face_index + 1))),
+                face_index,
+                result);
         }
         result.success = true;
     } catch (const Standard_Failure& failure) {

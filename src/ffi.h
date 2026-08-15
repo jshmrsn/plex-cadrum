@@ -214,6 +214,7 @@ MeshData mesh_shape(
 	double angular,
 	bool relative,
 	bool parallel,
+	bool include_edges,
 	const CancellationToken& progress);
 MeshData mesh_shape_faces(
 	const TopoDS_Shape& shape,

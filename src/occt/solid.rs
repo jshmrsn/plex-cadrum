@@ -703,8 +703,12 @@ impl Solid {
 		super::io::mesh_chunks_cancelable(solids, options, progress)
 	}
 
-	/// Mesh only selected artifact-local face ordinals so callers can retain
-	/// unchanged chunks across a local edit.
+	/// Return only selected artifact-local face ordinals from a coherent
+	/// whole-shape meshing pass.
+	///
+	/// Adjacent faces are intentionally included in native discretization even
+	/// though their chunks are not returned. Meshing isolated faces would allow
+	/// shared B-rep edges to acquire incompatible boundary polygons.
 	pub fn mesh_face_chunks(&self, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
 		super::io::mesh_face_chunks(self, face_indices, options)
 	}
@@ -714,7 +718,9 @@ impl Solid {
 		super::io::mesh_face_chunks_cancelable(self, face_indices, options, progress)
 	}
 
-	/// Discretize only ordered topological edges without surface meshing.
+	/// Return ordered topological edge polylines from a detached whole-shape
+	/// triangulation. Surface chunks are discarded, but the native meshing pass
+	/// is required so every edge uses its face triangulation's exact nodes.
 	pub fn edge_polyline_chunks(&self, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
 		super::io::edge_polyline_chunks(self, options)
 	}

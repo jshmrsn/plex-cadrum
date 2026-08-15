@@ -21,6 +21,9 @@ mod ffi_bridge {
 		chunk_face_indices: Vec<u32>,
 		face_vertex_offsets: Vec<u32>,
 		face_index_offsets: Vec<u32>,
+		edge_points: Vec<f64>, // flat xyz, sampled from polygons on the face triangulations
+		chunk_edge_indices: Vec<u32>,
+		edge_point_offsets: Vec<u32>,
 		success: bool,
 	}
 
@@ -210,7 +213,7 @@ mod ffi_bridge {
 
 		// ==================== Meshing ====================
 
-		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool, progress: &CancellationToken) -> MeshData;
+		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool, include_edges: bool, progress: &CancellationToken) -> MeshData;
 		fn mesh_shape_faces(shape: &TopoDS_Shape, face_indices: &[u32], linear: f64, angular: f64, relative: bool, parallel: bool, progress: &CancellationToken) -> MeshData;
 
 		// ==================== Topology enumeration ====================
