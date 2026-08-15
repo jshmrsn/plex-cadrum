@@ -2405,6 +2405,18 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
         const HistoryMaps result_maps(*output);
         append_builder_topology_history(mk, solid, 0, result_maps,
             out_topology_history);
+        append_shared_topology_history(solid, 0, result_maps,
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Face, {HistoryKind::Face, HistoryKind::Edge},
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Edge, {HistoryKind::Edge, HistoryKind::Vertex},
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Vertex, {HistoryKind::Vertex},
+            out_topology_history);
+        remove_related_deleted_topology(out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return output;
     } catch (const Standard_Failure& failure) {
@@ -2461,6 +2473,18 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
         const HistoryMaps result_maps(*output);
         append_builder_topology_history(mk, solid, 0, result_maps,
             out_topology_history);
+        append_shared_topology_history(solid, 0, result_maps,
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Face, {HistoryKind::Face, HistoryKind::Edge},
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Edge, {HistoryKind::Edge, HistoryKind::Vertex},
+            out_topology_history);
+        append_aggregate_generated_history(solid, 0, result_maps,
+            HistoryKind::Vertex, {HistoryKind::Vertex},
+            out_topology_history);
+        remove_related_deleted_topology(out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return output;
     } catch (const Standard_Failure& failure) {
