@@ -185,6 +185,13 @@ pub struct TopologyHistory {
 }
 
 impl TopologyHistory {
+	/// Builds a normalized operation history from adapter-provided relations.
+	pub fn from_parts(relations: impl IntoIterator<Item = TopologyRelation>, deleted: impl IntoIterator<Item = InputTopology>, unresolved: impl IntoIterator<Item = ResultTopology>) -> Self {
+		let mut history = Self { relations: relations.into_iter().collect(), deleted: deleted.into_iter().collect(), unresolved: unresolved.into_iter().collect() };
+		history.normalize();
+		history
+	}
+
 	pub fn relations(&self) -> &[TopologyRelation] {
 		&self.relations
 	}
@@ -199,6 +206,56 @@ impl TopologyHistory {
 
 	pub fn sources_for(&self, result: ResultTopology) -> impl Iterator<Item = &TopologyRelation> {
 		self.relations.iter().filter(move |relation| relation.result == result)
+	}
+
+	/// Compose this source-to-intermediate history with a subsequent
+	/// intermediate-to-result operation history.
+	pub fn then(&self, next: &Self) -> Self {
+		let mut relations = Vec::new();
+		let mut unresolved = next.unresolved.clone();
+		for next_relation in &next.relations {
+			if next_relation.source.operand != 0 {
+				relations.push(*next_relation);
+				continue;
+			}
+			let intermediate = ResultTopology { kind: next_relation.source.kind, index: next_relation.source.index };
+			let mut found = false;
+			for source_relation in self.sources_for(intermediate) {
+				found = true;
+				relations.push(TopologyRelation { result: next_relation.result, relation: combine_relation_kinds(source_relation.relation, next_relation.relation), source: source_relation.source });
+			}
+			if !found {
+				unresolved.push(next_relation.result);
+			}
+		}
+
+		let mut deleted = self.deleted.clone();
+		for next_deleted in &next.deleted {
+			if next_deleted.operand != 0 {
+				deleted.push(*next_deleted);
+				continue;
+			}
+			let intermediate = ResultTopology { kind: next_deleted.kind, index: next_deleted.index };
+			deleted.extend(self.sources_for(intermediate).map(|relation| relation.source));
+		}
+		Self::from_parts(relations, deleted, unresolved)
+	}
+
+	fn normalize(&mut self) {
+		self.relations.sort_unstable_by_key(|item| (item.result.kind as u8, item.result.index, item.source.operand, item.source.kind as u8, item.source.index, item.relation as u8));
+		let mut normalized = Vec::<TopologyRelation>::with_capacity(self.relations.len());
+		for relation in self.relations.drain(..) {
+			if let Some(existing) = normalized.last_mut().filter(|existing| existing.result == relation.result && existing.source == relation.source) {
+				existing.relation = combine_relation_kinds(existing.relation, relation.relation);
+			} else {
+				normalized.push(relation);
+			}
+		}
+		self.relations = normalized;
+		self.deleted.sort_unstable_by_key(|item| (item.operand, item.kind as u8, item.index));
+		self.deleted.dedup();
+		self.unresolved.sort_unstable_by_key(|item| (item.kind as u8, item.index));
+		self.unresolved.dedup();
 	}
 
 	pub(crate) fn remap_result_to(&self, global: &TopologySnapshot, local: &TopologySnapshot) -> Self {
@@ -218,6 +275,16 @@ impl TopologyHistory {
 		relations.dedup();
 		let unresolved = self.unresolved.iter().filter_map(|result| remap(*result)).collect();
 		Self { relations, deleted: self.deleted.clone(), unresolved }
+	}
+}
+
+fn combine_relation_kinds(first: TopologyRelationKind, second: TopologyRelationKind) -> TopologyRelationKind {
+	if matches!(first, TopologyRelationKind::Generated) || matches!(second, TopologyRelationKind::Generated) {
+		TopologyRelationKind::Generated
+	} else if matches!(first, TopologyRelationKind::Modified) || matches!(second, TopologyRelationKind::Modified) {
+		TopologyRelationKind::Modified
+	} else {
+		TopologyRelationKind::Unchanged
 	}
 }
 
@@ -445,6 +512,12 @@ impl Solid {
 	/// recent topology-changing operation.
 	pub fn topology_history(&self) -> &TopologyHistory {
 		&self.topology_history
+	}
+
+	/// Rebase this operation's history through a source-preparation operation.
+	pub fn compose_source_history(mut self, source_history: &TopologyHistory) -> Self {
+		self.topology_history = source_history.then(&self.topology_history);
+		self
 	}
 
 	/// Counts unique topological vertices without building adjacency or query facts.

@@ -1,6 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cadrum::{Boolean, CurveGeometryKind, DVec3, ProfileOrient, Solid, SurfaceGeometryKind, Tessellation, TopologyKind, TopologyQueryOptions, TopologyRelationKind};
+use cadrum::{Boolean, CurveGeometryKind, DVec3, InputTopology, ProfileOrient, ResultTopology, Solid, SurfaceGeometryKind, Tessellation, TopologyHistory, TopologyKind, TopologyQueryOptions, TopologyRelation, TopologyRelationKind};
+
+#[test]
+fn topology_histories_compose_source_preparation_with_modeling_results() {
+	let preparation = TopologyHistory::from_parts([TopologyRelation { result: ResultTopology { kind: TopologyKind::Edge, index: 0 }, relation: TopologyRelationKind::Modified, source: InputTopology { operand: 0, kind: TopologyKind::Edge, index: 15 } }, TopologyRelation { result: ResultTopology { kind: TopologyKind::Edge, index: 1 }, relation: TopologyRelationKind::Unchanged, source: InputTopology { operand: 0, kind: TopologyKind::Edge, index: 6 } }], [InputTopology { operand: 0, kind: TopologyKind::Face, index: 8 }], []);
+	let operation = TopologyHistory::from_parts([TopologyRelation { result: ResultTopology { kind: TopologyKind::Face, index: 2 }, relation: TopologyRelationKind::Generated, source: InputTopology { operand: 0, kind: TopologyKind::Edge, index: 0 } }], [InputTopology { operand: 0, kind: TopologyKind::Edge, index: 1 }], []);
+
+	let composed = preparation.then(&operation);
+
+	assert_eq!(composed.relations(), [TopologyRelation { result: ResultTopology { kind: TopologyKind::Face, index: 2 }, relation: TopologyRelationKind::Generated, source: InputTopology { operand: 0, kind: TopologyKind::Edge, index: 15 } }]);
+	assert_eq!(composed.deleted(), [InputTopology { operand: 0, kind: TopologyKind::Face, index: 8 }, InputTopology { operand: 0, kind: TopologyKind::Edge, index: 6 },]);
+	assert!(composed.unresolved().is_empty());
+}
 
 #[test]
 fn cube_topology_snapshot_is_bidirectionally_consistent() {
