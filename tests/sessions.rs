@@ -38,6 +38,18 @@ fn prepared_extrusion_reuses_profile_and_honors_cancellation() {
 }
 
 #[test]
+fn prepared_sweep_reuses_profile_across_spine_updates() {
+	let profile = Edge::polygon(&[DVec3::new(3.0, 0.0, -1.0), DVec3::new(5.0, 0.0, -1.0), DVec3::new(5.0, 0.0, 1.0), DVec3::new(3.0, 0.0, 1.0)]).expect("profile");
+	let session = cadrum::SweepSession::prepare(&profile).expect("prepare sweep");
+	let cancellation = cadrum::CancellationToken::new();
+	for angle in [0.5, 1.0, 1.5] {
+		let spine = Edge::arc_3pts(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0 * (angle * 0.5_f64).cos(), 4.0 * (angle * 0.5_f64).sin(), 0.0), DVec3::new(4.0 * angle.cos(), 4.0 * angle.sin(), 0.0)).expect("spine");
+		let result = session.update([&spine], cadrum::ProfileOrient::Up(DVec3::Z), &cancellation).expect("sweep update");
+		assert!(result.volume() > 0.0);
+	}
+}
+
+#[test]
 fn prepared_sessions_reject_empty_or_invalid_topology() {
 	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	assert!(matches!(cube.prepare_edge_blend(&[]), Err(Error::InvalidEdge(_))));

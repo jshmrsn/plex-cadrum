@@ -103,6 +103,11 @@ pub struct ExtrusionSession {
 	profile: Vec<Edge>,
 }
 
+/// Prepared invariant profile topology for repeated sweep/revolution updates.
+pub struct SweepSession {
+	profile: Vec<Edge>,
+}
+
 pub struct FaceEditSession {
 	source: Solid,
 	face_index: u32,
@@ -690,6 +695,20 @@ impl ExtrusionSession {
 	/// Rebuild the prepared profile with a new extrusion direction.
 	pub fn update(&self, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
 		Solid::extrude_cancelable(&self.profile, direction, progress)
+	}
+}
+
+impl SweepSession {
+	pub fn prepare<'a>(profile: impl IntoIterator<Item = &'a Edge>) -> Result<Self, Error> {
+		let profile = profile.into_iter().map(Edge::shared_copy).collect::<Vec<_>>();
+		if profile.is_empty() {
+			return Err(Error::InvalidEdge("a sweep profile needs at least one edge".into()));
+		}
+		Ok(Self { profile })
+	}
+
+	pub fn update<'a, 'b>(&self, spine: impl IntoIterator<Item = &'a Edge>, orient: ProfileOrient<'b>, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
+		Solid::sweep_cancelable(&self.profile, spine, orient, progress)
 	}
 }
 
