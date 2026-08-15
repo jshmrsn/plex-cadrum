@@ -268,6 +268,23 @@ pub(super) fn mesh_face_chunks(solid: &Solid, face_indices: &[u32], options: cra
 	Ok(decode_mesh_chunks(solid.inner(), data, crate::traits::Tessellation { include_edges: false, ..options })?.faces)
 }
 
+pub(super) fn edge_polyline_chunks(solid: &Solid, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
+	use crate::common::mesh::EdgePolylineChunk;
+	use glam::DVec3;
+
+	ffi::shape_edges(solid.inner())
+		.iter()
+		.enumerate()
+		.map(|(edge_index, edge)| {
+			let points = ffi::edge_approximation_segments(edge, options.deflection_linear, options.deflection_angular, options.relative_linear).chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
+			if points.len() < 2 {
+				return Err(Error::TriangulationFailed);
+			}
+			Ok(EdgePolylineChunk { edge_index: u32::try_from(edge_index).map_err(|_| Error::TriangulationFailed)?, points })
+		})
+		.collect()
+}
+
 fn decode_mesh_chunks(shape: &ffi::TopoDS_Shape, data: ffi::MeshData, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
 	use crate::common::mesh::{EdgePolylineChunk, FaceMeshChunk, MeshChunks};
 	use glam::DVec3;

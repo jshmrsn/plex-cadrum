@@ -154,3 +154,16 @@ fn keyed_mesh_chunks_cover_faces_and_ordered_edges() {
 	let selected = cube.mesh_face_chunks(&[1, 4], Tessellation::default()).expect("selected faces");
 	assert_eq!(selected.iter().map(|chunk| chunk.face_index).collect::<Vec<_>>(), [1, 4]);
 }
+
+#[test]
+fn surface_and_edge_presentation_can_be_requested_independently() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let options = Tessellation { include_edges: false, ..Tessellation::default() };
+	let surfaces = Solid::mesh_chunks([&cube], options).expect("surface chunks");
+	assert_eq!(surfaces.faces.len(), 6);
+	assert!(surfaces.edges.is_empty());
+
+	let edges = cube.edge_polyline_chunks(options).expect("edge chunks");
+	assert_eq!(edges.len(), 12);
+	assert!(edges.iter().all(|edge| edge.points.len() >= 2));
+}

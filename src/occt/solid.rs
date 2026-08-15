@@ -88,6 +88,21 @@ pub struct Solid {
 	topology_history: TopologyHistory,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EdgeBlendKind {
+	Fillet,
+	Chamfer,
+}
+
+pub struct EdgeBlendSession {
+	source: Solid,
+	edge_indices: Vec<u32>,
+}
+
+pub struct ExtrusionSession {
+	profile: Vec<Edge>,
+}
+
 /// The dimension of an artifact-local topology entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TopologyKind {
@@ -358,6 +373,11 @@ impl Solid {
 		super::io::mesh_face_chunks(self, face_indices, options)
 	}
 
+	/// Discretize only ordered topological edges without surface meshing.
+	pub fn edge_polyline_chunks(&self, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
+		super::io::edge_polyline_chunks(self, options)
+	}
+
 	/// Create a shallow occurrence sharing topology and geometry with this solid.
 	pub fn shared_copy(&self) -> Self {
 		Solid::new(
@@ -376,6 +396,21 @@ impl Solid {
 			result = result.rotate(DVec3::ZERO, axis, angle);
 		}
 		result.translate(translation)
+	}
+
+	pub fn prepare_edge_blend(&self, edge_indices: &[u32]) -> Result<EdgeBlendSession, Error> {
+		if edge_indices.is_empty() {
+			return Err(Error::InvalidEdge("an edge blend needs at least one edge".into()));
+		}
+		let edge_count = self.iter_edge().count();
+		if edge_indices.iter().any(|index| *index as usize >= edge_count) {
+			return Err(Error::InvalidEdge("an edge blend index is outside the source topology".into()));
+		}
+		let source = self.shared_copy();
+		// Resolve the source topology once when the session is prepared. Repeated
+		// updates then reuse both the live source shape and its cached edge handles.
+		source.iter_edge().count();
+		Ok(EdgeBlendSession { source, edge_indices: edge_indices.to_vec() })
 	}
 
 	/// Create an independent full copy with an ordinal source map. This creates
@@ -454,6 +489,42 @@ impl Solid {
 	/// Returns `true` if this solid wraps a null shape.
 	pub fn is_null(&self) -> bool {
 		ffi::shape_is_null(&self.inner)
+	}
+}
+
+impl EdgeBlendSession {
+	/// Rebuild this prepared edge blend with a new kind and size.
+	///
+	/// The source shape and selected edge handles remain live for the session's
+	/// lifetime. Only the OCCT builder and result history are recreated.
+	pub fn update(&self, kind: EdgeBlendKind, size: f64, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
+		let edges = self.edge_indices.iter().map(|index| self.source.iter_edge().nth(*index as usize).ok_or_else(|| Error::InvalidEdge("a prepared edge blend no longer matches its source topology".into()))).collect::<Result<Vec<_>, _>>()?;
+		match kind {
+			EdgeBlendKind::Fillet => self.source.fillet_edges_cancelable(size, edges, progress),
+			EdgeBlendKind::Chamfer => self.source.chamfer_edges_cancelable(size, edges, progress),
+		}
+	}
+
+	/// Return the process-local source occurrence identity for diagnostics.
+	pub fn source_id(&self) -> u64 {
+		self.source.id()
+	}
+}
+
+impl ExtrusionSession {
+	/// Prepare a profile once so repeated extrusion updates do not copy or
+	/// resolve profile edges for every pointer sample.
+	pub fn prepare<'a>(profile: impl IntoIterator<Item = &'a Edge>) -> Result<Self, Error> {
+		let profile = profile.into_iter().map(Edge::shared_copy).collect::<Vec<_>>();
+		if profile.is_empty() {
+			return Err(Error::InvalidEdge("an extrusion profile needs at least one edge".into()));
+		}
+		Ok(Self { profile })
+	}
+
+	/// Rebuild the prepared profile with a new extrusion direction.
+	pub fn update(&self, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
+		Solid::extrude_cancelable(&self.profile, direction, progress)
 	}
 }
 

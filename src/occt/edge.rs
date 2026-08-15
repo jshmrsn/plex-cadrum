@@ -25,6 +25,11 @@ impl Edge {
 			Ok(Edge { inner })
 		}
 	}
+
+	/// Create another owned handle to the same topology occurrence.
+	pub fn shared_copy(&self) -> Self {
+		Self { inner: ffi::clone_edge_handle(&self.inner) }
+	}
 }
 
 impl Clone for Edge {
