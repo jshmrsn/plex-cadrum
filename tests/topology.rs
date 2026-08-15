@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use cadrum::{Boolean, CurveGeometryKind, DVec3, ProfileOrient, Solid, SurfaceGeometryKind, Tessellation, TopologyKind, TopologyQueryOptions, TopologyRelationKind};
 
 #[test]
@@ -101,6 +103,25 @@ fn sweep_reports_profile_generated_topology() {
 	let spine = cadrum::Edge::line(DVec3::ZERO, DVec3::Z * 10.0).expect("spine");
 	let swept = Solid::sweep(&profile, [&spine], ProfileOrient::Fixed).expect("sweep");
 	assert!(swept.topology_history().relations().iter().any(|relation| { relation.result.kind == TopologyKind::Face && relation.relation == TopologyRelationKind::Generated && relation.source.kind == TopologyKind::Edge }));
+}
+
+#[test]
+fn loft_reports_complete_section_namespaced_topology() {
+	let lower = cadrum::Edge::polygon(&[DVec3::new(-3.0, -2.0, 0.0), DVec3::new(3.0, -2.0, 0.0), DVec3::new(3.0, 2.0, 0.0), DVec3::new(-3.0, 2.0, 0.0)]).expect("lower section");
+	let upper = lower.iter().map(|edge| edge.shared_copy().translate(DVec3::new(0.5, 0.5, 8.0))).collect::<Vec<_>>();
+	let loft = Solid::loft([lower.iter(), upper.iter()], false).expect("loft");
+	let history = loft.topology_history();
+	assert!(history.unresolved().is_empty(), "{history:?}");
+	let topology = loft.topology_snapshot().expect("loft topology");
+	for kind in [TopologyKind::Face, TopologyKind::Edge, TopologyKind::Vertex] {
+		let expected = match kind {
+			TopologyKind::Face => topology.face_ids().len(),
+			TopologyKind::Edge => topology.edge_ids().len(),
+			TopologyKind::Vertex => topology.vertex_ids().len(),
+		};
+		assert!((0..expected as u32).all(|index| history.relations().iter().any(|relation| relation.result.kind == kind && relation.result.index == index)));
+	}
+	assert_eq!(history.relations().iter().map(|relation| relation.source.operand).collect::<BTreeSet<_>>(), BTreeSet::from([0, 1]));
 }
 
 #[test]

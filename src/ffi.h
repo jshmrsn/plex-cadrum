@@ -400,7 +400,9 @@ void shape_vec_push(std::vector<TopoDS_Shape>& v, const TopoDS_Shape& s);
 // `ruled=true` connects adjacent sections with straight ruled panels.
 std::unique_ptr<TopoDS_Shape> make_loft(
     const std::vector<TopoDS_Edge>& all_edges,
-    bool ruled);
+    bool ruled,
+	const CancellationToken& progress,
+	HistoryData& out_topology_history);
 
 // Sew (stitch) free faces into a single closed shell and upgrade it to a
 // solid via BRepBuilderAPI_MakeSolid. The sewn result must contain exactly

@@ -59,3 +59,14 @@ fn prepared_shell_honors_cancellation_without_poisoning_its_source() {
 	let completed = session.update(-1.0, &CancellationToken::new()).expect("later shell");
 	assert!(completed.validate().expect("validate shell").valid);
 }
+
+#[test]
+fn loft_honors_cancellation_and_a_later_build_still_succeeds() {
+	let lower = Edge::polygon(&[DVec3::ZERO, DVec3::X * 2.0, DVec3::new(2.0, 2.0, 0.0), DVec3::Y * 2.0]).expect("lower section");
+	let upper = lower.iter().map(|edge| edge.shared_copy().translate(DVec3::Z * 5.0)).collect::<Vec<_>>();
+	let cancellation = CancellationToken::new();
+	cancellation.cancel();
+	assert!(matches!(Solid::loft_cancelable([lower.iter(), upper.iter()], false, &cancellation), Err(Error::Cancelled)));
+	let completed = Solid::loft_cancelable([lower.iter(), upper.iter()], false, &CancellationToken::new()).expect("later loft");
+	assert!(completed.validate().expect("validate loft").valid);
+}

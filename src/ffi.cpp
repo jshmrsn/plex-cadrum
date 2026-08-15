@@ -847,6 +847,38 @@ static void append_aggregate_generated_history(
     }
 }
 
+// Record operation-level generators for builder result topology that OCCT did
+// not classify. Each input shape has its own operand namespace, which is
+// important for loft sections and repeated occurrences that may contain
+// ordinally identical topology.
+static void append_multi_operand_aggregate_generated_history(
+    const std::vector<TopoDS_Shape>& inputs,
+    const HistoryMaps& result_maps,
+    HistoryKind result_kind,
+    std::initializer_list<HistoryKind> source_kinds,
+    HistoryData& out)
+{
+    const auto& results = result_maps.map(result_kind);
+    for (int result_ordinal = 1; result_ordinal <= results.Extent(); ++result_ordinal) {
+        const uint32_t result_index = static_cast<uint32_t>(result_ordinal - 1);
+        if (result_has_topology_relation(out, result_kind, result_index)) continue;
+        for (size_t operand = 0; operand < inputs.size(); ++operand) {
+            const HistoryMaps input_maps(inputs[operand]);
+            for (HistoryKind source_kind : source_kinds) {
+                const auto& sources = input_maps.map(source_kind);
+                for (int source_ordinal = 1;
+                     source_ordinal <= sources.Extent();
+                     ++source_ordinal) {
+                    append_history_relation(out, result_maps,
+                        results(result_ordinal), HistoryRelation::Generated,
+                        static_cast<uint32_t>(operand), source_kind,
+                        static_cast<uint32_t>(source_ordinal - 1));
+                }
+            }
+        }
+    }
+}
+
 // Builder APIs can report a source as deleted while omitting the generated
 // result that an operation-level fallback subsequently relates to it. A
 // related source is not deleted in Plex's semantic history, so remove those
@@ -2625,9 +2657,12 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
 // between adjacent sections. Both pass through every section wire exactly.
 std::unique_ptr<TopoDS_Shape> make_loft(
     const std::vector<TopoDS_Edge>& all_edges,
-    bool ruled)
+    bool ruled,
+    const CancellationToken& progress,
+    HistoryData& out_topology_history)
 {
     try {
+        if (all_edges.empty() || rust_progress_cancelled(progress)) return nullptr;
         BRepOffsetAPI_ThruSections loft(
             /*isSolid=*/true,
             /*isRuled=*/ruled,
@@ -2635,13 +2670,16 @@ std::unique_ptr<TopoDS_Shape> make_loft(
 
         // Split all_edges by null sentinels into section wires.
         size_t wire_count = 0;
+        std::vector<TopoDS_Shape> section_wires;
         BRepBuilderAPI_MakeWire wire_maker;
         bool has_edges = false;
 
         auto flush_wire = [&]() -> bool {
             if (!has_edges) return true;
             if (!wire_maker.IsDone()) return false;
-            loft.AddWire(wire_maker.Wire());
+            const TopoDS_Wire wire = wire_maker.Wire();
+            loft.AddWire(wire);
+            section_wires.push_back(wire);
             wire_count++;
             wire_maker = BRepBuilderAPI_MakeWire();
             has_edges = false;
@@ -2660,9 +2698,32 @@ std::unique_ptr<TopoDS_Shape> make_loft(
 
         if (wire_count < 2) return nullptr;
 
-        loft.Build();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        loft.Build(indicator->Start());
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!loft.IsDone()) return nullptr;
-        return std::make_unique<TopoDS_Shape>(loft.Shape());
+        auto result = std::make_unique<TopoDS_Shape>(loft.Shape());
+        const HistoryMaps result_maps(*result);
+        for (size_t operand = 0; operand < section_wires.size(); ++operand) {
+            append_builder_topology_history(loft, section_wires[operand],
+                static_cast<uint32_t>(operand), result_maps,
+                out_topology_history);
+            append_shared_topology_history(section_wires[operand],
+                static_cast<uint32_t>(operand), result_maps,
+                out_topology_history);
+        }
+        append_multi_operand_aggregate_generated_history(section_wires,
+            result_maps, HistoryKind::Face, {HistoryKind::Edge},
+            out_topology_history);
+        append_multi_operand_aggregate_generated_history(section_wires,
+            result_maps, HistoryKind::Edge,
+            {HistoryKind::Edge, HistoryKind::Vertex}, out_topology_history);
+        append_multi_operand_aggregate_generated_history(section_wires,
+            result_maps, HistoryKind::Vertex, {HistoryKind::Vertex},
+            out_topology_history);
+        remove_related_deleted_topology(out_topology_history);
+        finish_topology_history(result_maps, out_topology_history);
+        return result;
     } catch (const Standard_Failure& failure) {
         record_standard_failure(__func__, "native", 7, failure);
         return nullptr;

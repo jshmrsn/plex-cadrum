@@ -591,6 +591,49 @@ impl Solid {
 		.with_topology_history(topology_history))
 	}
 
+	pub fn loft_cancelable<'a, I: IntoIterator<Item = &'a Edge>, S: IntoIterator<Item = I>>(sections: S, ruled: bool, progress: &ffi::CancellationToken) -> Result<Self, Error>
+	where
+		Edge: 'a,
+	{
+		let _guard = LOFT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+		let mut all_edges = ffi::edge_vec_new();
+		let mut section_count = 0usize;
+		for section in sections {
+			if section_count > 0 {
+				ffi::edge_vec_push_null(all_edges.pin_mut());
+			}
+			let mut count = 0u32;
+			for edge in section {
+				ffi::edge_vec_push(all_edges.pin_mut(), &edge.inner);
+				count += 1;
+			}
+			if count == 0 {
+				return Err(Error::LoftFailed(format!("loft: section {section_count} is empty (each section must contain ≥1 edge)")));
+			}
+			section_count += 1;
+		}
+
+		if section_count < 2 {
+			return Err(Error::LoftFailed(format!("loft: need ≥2 sections, got {section_count} (a single section has no thickness to skin across)")));
+		}
+
+		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
+		let shape = ffi::make_loft(&all_edges, ruled, progress, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::LoftFailed(format!("loft: OCCT BRepOffsetAPI_ThruSections failed (sections={section_count}, ruled={ruled}). Check that each section forms a valid closed wire and sections are not coplanar.")), "loft", "occt_build") });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			std::collections::HashMap::new(),
+			Default::default(),
+		)
+		.with_topology_history(topology_history))
+	}
+
 	// ==================== Internal accessors ====================
 
 	/// Borrow the underlying `TopoDS_Shape` (crate-internal only).
@@ -1242,44 +1285,7 @@ impl SolidStruct for Solid {
 	where
 		Edge: 'a,
 	{
-		let _guard = LOFT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-		let mut all_edges = ffi::edge_vec_new();
-		let mut section_count = 0usize;
-
-		for sec in sections {
-			if section_count > 0 {
-				ffi::edge_vec_push_null(all_edges.pin_mut());
-			}
-			let mut count = 0u32;
-			for edge in sec {
-				ffi::edge_vec_push(all_edges.pin_mut(), &edge.inner);
-				count += 1;
-			}
-			if count == 0 {
-				return Err(Error::LoftFailed(format!("loft: section {} is empty (each section must contain ≥1 edge)", section_count)));
-			}
-			section_count += 1;
-		}
-
-		if section_count < 2 {
-			return Err(Error::LoftFailed(format!("loft: need ≥2 sections, got {} (a single section has no thickness to skin across)", section_count)));
-		}
-
-		let shape = ffi::make_loft(&all_edges, ruled);
-		if shape.is_null() {
-			return Err(Error::LoftFailed(format!(
-				"loft: OCCT BRepOffsetAPI_ThruSections failed (sections={}, ruled={}). \
-				 Check that each section forms a valid closed wire and sections are not coplanar.",
-				section_count, ruled
-			)));
-		}
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		))
+		Self::loft_cancelable(sections, ruled, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Sew ====================
