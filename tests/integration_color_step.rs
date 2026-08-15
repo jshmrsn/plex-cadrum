@@ -123,7 +123,7 @@ fn solid_level_styled_item_is_read_and_reaches_the_mesh() {
 
 	// The file says COLOUR_RGB('鋼 - サテン', 0.627450980392157, ×3), which OCCT reads as
 	// sRGB and stores linear.
-	let linear = ((0.627_450_98_f32 + 0.055) / 1.055).powf(2.4);
+	let linear = ((0.627_451_f32 + 0.055) / 1.055).powf(2.4);
 	let c = solids[0].colormap().get(&solids[0].id()).copied().expect("the solid-level colour must survive the read");
 	assert!([c.r, c.g, c.b].iter().all(|v| (v - linear).abs() < 1e-5), "expected the linear form of the file's sRGB, got {c:?}");
 	assert_eq!(solids[0].iter_face().filter(|f| solids[0].colormap().contains_key(&f.id())).count(), 0, "a solid-level style must not be expanded onto faces");

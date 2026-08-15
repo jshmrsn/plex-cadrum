@@ -90,9 +90,10 @@ pub(super) fn read_step<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 		let mut rust_reader = RustReader::from_ref(reader);
 		let mut ids: Vec<u64> = Default::default();
 		let mut rgb: Vec<f32> = Default::default();
+		ffi::begin_operation();
 		let inner = ffi::read_step_color_stream(&mut rust_reader, &mut ids, &mut rgb);
 		if inner.is_null() {
-			return Err(Error::StepReadFailed);
+			return Err(ffi::operation_error(Error::StepReadFailed, "read STEP", "read"));
 		}
 		let colormap: std::collections::HashMap<u64, Color> = ids.into_iter().zip(rgb.chunks_exact(3)).map(|(id, c)| (id, Color { r: c[0], g: c[1], b: c[2] })).collect();
 		Ok(CompoundShape::from_raw(inner, colormap, Default::default(), Default::default()).decompose())
@@ -100,9 +101,10 @@ pub(super) fn read_step<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 	#[cfg(not(feature = "color"))]
 	{
 		let mut rust_reader = RustReader::from_ref(reader);
+		ffi::begin_operation();
 		let inner = ffi::read_step_stream(&mut rust_reader);
 		if inner.is_null() {
-			return Err(Error::StepReadFailed);
+			return Err(ffi::operation_error(Error::StepReadFailed, "read STEP", "read"));
 		}
 		Ok(CompoundShape::from_raw(inner, Default::default(), Default::default()).decompose())
 	}
@@ -116,9 +118,10 @@ pub(super) fn read_brep<R: Read>(reader: &mut R) -> Result<Vec<Solid>, Error> {
 
 	// Payload length — where a trailer would begin. Unwritten, and unread, on null.
 	let mut consumed = 0usize;
+	ffi::begin_operation();
 	let inner = ffi::read_brep_stream(&buf, &mut consumed);
 	if inner.is_null() {
-		return Err(Error::BrepReadFailed);
+		return Err(ffi::operation_error(Error::BrepReadFailed, "read B-rep", "read"));
 	}
 
 	#[cfg(feature = "color")]
@@ -149,19 +152,21 @@ pub(super) fn write_step<'a, W: Write>(solids: impl IntoIterator<Item = &'a Soli
 			rgb.extend_from_slice(&[c.r, c.g, c.b]);
 		}
 		let mut rust_writer = RustWriter::from_ref(writer);
+		ffi::begin_operation();
 		if ffi::write_step_color_stream(compound.inner(), &ids, &rgb, &mut rust_writer) {
 			Ok(())
 		} else {
-			Err(Error::StepWriteFailed)
+			Err(ffi::operation_error(Error::StepWriteFailed, "write STEP", "write"))
 		}
 	}
 	#[cfg(not(feature = "color"))]
 	{
 		let mut rust_writer = RustWriter::from_ref(writer);
+		ffi::begin_operation();
 		if ffi::write_step_stream(compound.inner(), &mut rust_writer) {
 			Ok(())
 		} else {
-			Err(Error::StepWriteFailed)
+			Err(ffi::operation_error(Error::StepWriteFailed, "write STEP", "write"))
 		}
 	}
 }
@@ -171,8 +176,9 @@ pub(super) fn write_brep<'a, W: Write>(solids: impl IntoIterator<Item = &'a Soli
 	{
 		// Scoped: the streambuf flushes on drop, so the payload lands before the trailer.
 		let mut rust_writer = RustWriter::from_ref(writer);
+		ffi::begin_operation();
 		if !ffi::write_brep_stream(compound.inner(), &mut rust_writer) {
-			return Err(Error::BrepWriteFailed);
+			return Err(ffi::operation_error(Error::BrepWriteFailed, "write B-rep", "write"));
 		}
 	}
 	#[cfg(feature = "color")]
@@ -204,9 +210,11 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	};
 
 	let compound = CompoundShape::new(solids);
-	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
+	let progress = ffi::CancellationToken::new();
+	ffi::begin_operation();
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, &progress);
 	if !data.success {
-		return Err(Error::TriangulationFailed);
+		return Err(ffi::operation_error(Error::TriangulationFailed, "mesh shape", "mesh"));
 	}
 	let vertex_count = data.vertices.len() / 3;
 	let vertices: Vec<DVec3> = (0..vertex_count).map(|i| DVec3::new(data.vertices[i * 3], data.vertices[i * 3 + 1], data.vertices[i * 3 + 2])).collect();
@@ -257,18 +265,38 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 }
 
 pub(super) fn mesh_chunks<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
+	mesh_chunks_cancelable(solids, options, &ffi::CancellationToken::new())
+}
+
+pub(super) fn mesh_chunks_cancelable<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<crate::common::mesh::MeshChunks, Error> {
 	let solids = solids.into_iter().collect::<Vec<_>>();
 	let compound = CompoundShape::new(solids.iter().copied());
-	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
+	ffi::begin_operation();
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, progress);
+	if progress.is_cancelled() {
+		return Err(Error::Cancelled);
+	}
 	decode_mesh_chunks(compound.inner(), data, options)
 }
 
 pub(super) fn mesh_face_chunks(solid: &Solid, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
-	let data = ffi::mesh_shape_faces(solid.inner(), face_indices, options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
+	mesh_face_chunks_cancelable(solid, face_indices, options, &ffi::CancellationToken::new())
+}
+
+pub(super) fn mesh_face_chunks_cancelable(solid: &Solid, face_indices: &[u32], options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
+	ffi::begin_operation();
+	let data = ffi::mesh_shape_faces(solid.inner(), face_indices, options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel, progress);
+	if progress.is_cancelled() {
+		return Err(Error::Cancelled);
+	}
 	Ok(decode_mesh_chunks(solid.inner(), data, crate::traits::Tessellation { include_edges: false, ..options })?.faces)
 }
 
 pub(super) fn edge_polyline_chunks(solid: &Solid, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
+	edge_polyline_chunks_cancelable(solid, options, &ffi::CancellationToken::new())
+}
+
+pub(super) fn edge_polyline_chunks_cancelable(solid: &Solid, options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
 	use crate::common::mesh::EdgePolylineChunk;
 	use glam::DVec3;
 
@@ -276,6 +304,9 @@ pub(super) fn edge_polyline_chunks(solid: &Solid, options: crate::traits::Tessel
 		.iter()
 		.enumerate()
 		.map(|(edge_index, edge)| {
+			if progress.is_cancelled() {
+				return Err(Error::Cancelled);
+			}
 			let points = ffi::edge_approximation_segments(edge, options.deflection_linear, options.deflection_angular, options.relative_linear).chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
 			if points.len() < 2 {
 				return Err(Error::TriangulationFailed);
@@ -291,7 +322,7 @@ fn decode_mesh_chunks(shape: &ffi::TopoDS_Shape, data: ffi::MeshData, options: c
 
 	let face_count = data.chunk_face_tshape_ids.len();
 	if !data.success || !data.vertices.len().is_multiple_of(3) || data.normals.len() != data.vertices.len() || data.chunk_face_indices.len() != face_count || data.face_vertex_offsets.len() != face_count + 1 || data.face_index_offsets.len() != face_count + 1 {
-		return Err(Error::TriangulationFailed);
+		return Err(ffi::operation_error(Error::TriangulationFailed, "mesh shape", "mesh"));
 	}
 	let vertices = data.vertices.chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
 	let normals = data.normals.chunks_exact(3).map(|normal| DVec3::new(normal[0], normal[1], normal[2])).collect::<Vec<_>>();

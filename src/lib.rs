@@ -36,7 +36,7 @@ pub use traits::{BSplineEnd, ProfileOrient, Tessellation};
 pub use common::color::Color;
 pub use common::{
 	boolean::Boolean,
-	error::Error,
+	error::{Error, FailureCategory, OperationFailure},
 	mesh::{EdgePolylineChunk, FaceMeshChunk, Mesh, MeshChunks, Scene2D, SceneOption},
 };
 // Re-export glam types used in cadrum's public API. Users should reach glam

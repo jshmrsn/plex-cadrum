@@ -1,4 +1,4 @@
-use cadrum::{Boolean, CancellationToken, DVec3, Error, Solid};
+use cadrum::{Boolean, CancellationToken, DVec3, Error, Solid, Tessellation};
 
 #[test]
 fn cancelled_fillet_is_distinct_from_an_algorithm_failure() {
@@ -42,4 +42,15 @@ fn completed_builder_reports_progress() {
 	cube.fillet_edges_cancelable(1.0, [edge], &progress).expect("fillet");
 	assert!(progress.progress() > 0.0);
 	assert!(progress.progress() <= 1.0);
+}
+
+#[test]
+fn cancelled_presentation_does_not_publish_partial_chunks() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let cancellation = CancellationToken::new();
+	cancellation.cancel();
+
+	assert!(matches!(Solid::mesh_chunks_cancelable([&cube], Tessellation::default(), &cancellation), Err(Error::Cancelled)));
+	assert!(matches!(cube.mesh_face_chunks_cancelable(&[0, 1], Tessellation::default(), &cancellation), Err(Error::Cancelled)));
+	assert!(matches!(cube.edge_polyline_chunks_cancelable(Tessellation::default(), &cancellation), Err(Error::Cancelled)));
 }

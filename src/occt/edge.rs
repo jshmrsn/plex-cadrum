@@ -84,8 +84,9 @@ impl EdgeStruct for Edge {
 	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		let (mut cpx, mut cpy, mut cpz) = (0.0_f64, 0.0_f64, 0.0_f64);
 		let (mut tx, mut ty, mut tz) = (0.0_f64, 0.0_f64, 0.0_f64);
+		ffi::begin_operation();
 		if !ffi::edge_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut tx, &mut ty, &mut tz) {
-			return Err(Error::ProjectionFailed("edge"));
+			return Err(ffi::operation_error(Error::ProjectionFailed("edge"), "project edge", "project"));
 		}
 		Ok((DVec3::new(cpx, cpy, cpz), DVec3::new(tx, ty, tz)))
 	}
@@ -93,8 +94,9 @@ impl EdgeStruct for Edge {
 	fn midpoint(&self) -> Result<(DVec3, DVec3), Error> {
 		let (mut px, mut py, mut pz) = (0.0_f64, 0.0_f64, 0.0_f64);
 		let (mut tx, mut ty, mut tz) = (0.0_f64, 0.0_f64, 0.0_f64);
+		ffi::begin_operation();
 		if !ffi::edge_midpoint(&self.inner, &mut px, &mut py, &mut pz, &mut tx, &mut ty, &mut tz) {
-			return Err(Error::ProjectionFailed("edge midpoint"));
+			return Err(ffi::operation_error(Error::ProjectionFailed("edge midpoint"), "query edge midpoint", "project"));
 		}
 		Ok((DVec3::new(px, py, pz), DVec3::new(tx, ty, tz)))
 	}

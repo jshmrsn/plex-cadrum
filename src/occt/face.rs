@@ -33,8 +33,9 @@ impl FaceStruct for Face {
 	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		let (mut cpx, mut cpy, mut cpz) = (0.0_f64, 0.0_f64, 0.0_f64);
 		let (mut nx, mut ny, mut nz) = (0.0_f64, 0.0_f64, 0.0_f64);
+		ffi::begin_operation();
 		if !ffi::face_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut nx, &mut ny, &mut nz) {
-			return Err(Error::ProjectionFailed("face"));
+			return Err(ffi::operation_error(Error::ProjectionFailed("face"), "project face", "project"));
 		}
 		Ok((DVec3::new(cpx, cpy, cpz), DVec3::new(nx, ny, nz)))
 	}

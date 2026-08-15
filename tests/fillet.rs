@@ -5,6 +5,7 @@
 //!     cross-section `r² − π r² / 4` over length `a − 2r`
 //!   - 8 sphere-octant corners:   each replaces a cube corner of volume
 //!     `r³ − (4/3) π r³ / 8 = r³ − π r³ / 6`
+//!
 //! The analytical result below is used to validate OCCT's output within 0.1%.
 
 use cadrum::{DVec3, Error, Solid};

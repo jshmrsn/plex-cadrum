@@ -98,10 +98,10 @@ fn test_bspline_01_two_period_torus_point_symmetry() {
 		DQuat::from_axis_angle(DVec3::Z, phi) * translated
 	};
 
-	let plasma = Solid::bspline(M, N, true, &point).expect("2-period bspline torus should succeed");
+	let plasma = Solid::bspline(M, N, true, point).expect("2-period bspline torus should succeed");
 	assert!(plasma.volume() > 0.0);
 
 	assert_quadrant_point_symmetry(&plasma, 0.01);
 
-	write_outputs(&[plasma, Solid::bspline(M, N, false, &point).unwrap().translate(DVec3::Z * -10.0)], "test_bspline_01_two_period_torus");
+	write_outputs(&[plasma, Solid::bspline(M, N, false, point).unwrap().translate(DVec3::Z * -10.0)], "test_bspline_01_two_period_torus");
 }

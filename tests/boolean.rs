@@ -163,7 +163,7 @@ fn test_build_direct() {
 	let a = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	let b = Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).translate(DVec3::new(5.0, 0.0, 0.0));
 	let c = Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).translate(DVec3::new(2.0, 0.0, 0.0));
-	let solids = vec![a, b, c];
+	let solids = [a, b, c];
 	// (A∪B)∖C → DNF: A∖C ∪ B∖C → clauses [1,-3,0, 2,-3,0]
 	let clauses = vec![1, -3, 0, 2, -3, 0];
 	let v = Solid::boolean(solids.iter(), clauses).build_vec().unwrap();

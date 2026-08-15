@@ -21,11 +21,15 @@ using TopoDS_Edge = ::TopoDS_Edge;
 struct RustReader;
 struct RustWriter;
 struct CancellationToken;
+struct OperationDiagnosticData;
 
 // Forward-declare shared structs (defined by cxx in ffi.rs.h)
 struct MeshData;
 struct TopologyData;
 struct HistoryData;
+
+void clear_operation_diagnostic();
+OperationDiagnosticData take_operation_diagnostic();
 
 // ==================== Shape I/O (streambuf callback) ====================
 
@@ -197,14 +201,21 @@ void compound_add(TopoDS_Shape& compound, const TopoDS_Shape& child);
 
 // ==================== Meshing ====================
 
-MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative, bool parallel);
+MeshData mesh_shape(
+	const TopoDS_Shape& shape,
+	double linear,
+	double angular,
+	bool relative,
+	bool parallel,
+	const CancellationToken& progress);
 MeshData mesh_shape_faces(
 	const TopoDS_Shape& shape,
 	rust::Slice<const uint32_t> face_indices,
 	double linear,
 	double angular,
 	bool relative,
-	bool parallel);
+	bool parallel,
+	const CancellationToken& progress);
 
 // ==================== Topology enumeration ====================
 

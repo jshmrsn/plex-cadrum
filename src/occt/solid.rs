@@ -255,9 +255,10 @@ impl Solid {
 		}
 		let mut history = Vec::new();
 		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
 		let shape = ffi::builder_fillet(&self.inner, &edge_vec, radius, progress, &mut history, &mut topology_history);
 		if shape.is_null() {
-			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::FilletFailed });
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::FilletFailed, "fillet", "occt_build") });
 		}
 		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
@@ -278,9 +279,10 @@ impl Solid {
 		}
 		let mut history = Vec::new();
 		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
 		let shape = ffi::builder_chamfer(&self.inner, &edge_vec, distance, progress, &mut history, &mut topology_history);
 		if shape.is_null() {
-			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::ChamferFailed });
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::ChamferFailed, "chamfer", "occt_build") });
 		}
 		let topology_history = decode_topology_history(topology_history)?;
 		#[cfg(feature = "color")]
@@ -304,9 +306,10 @@ impl Solid {
 			ffi::edge_vec_push(profile_vec.pin_mut(), &edge.inner);
 		}
 		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
 		let shape = ffi::make_extrude(&profile_vec, direction.x, direction.y, direction.z, progress, &mut topology_history);
 		if shape.is_null() {
-			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::ExtrudeFailed });
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::ExtrudeFailed, "extrude", "occt_build") });
 		}
 		let topology_history = decode_topology_history(topology_history)?;
 		Ok(Solid::new(
@@ -329,9 +332,10 @@ impl Solid {
 		}
 		let (kind, ux, uy, uz, auxiliary) = encode_orient(orient);
 		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
 		let shape = ffi::make_pipe_shell(&profile_vec, &spine_vec, kind, ux, uy, uz, &auxiliary, progress, &mut topology_history);
 		if shape.is_null() {
-			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::SweepFailed });
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::SweepFailed, "sweep", "occt_build") });
 		}
 		let topology_history = decode_topology_history(topology_history)?;
 		Ok(Solid::new(
@@ -367,15 +371,30 @@ impl Solid {
 		super::io::mesh_chunks(solids, options)
 	}
 
+	/// Mesh topology-keyed chunks with cooperative cancellation.
+	pub fn mesh_chunks_cancelable<'a>(solids: impl IntoIterator<Item = &'a Self>, options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<crate::common::mesh::MeshChunks, Error> {
+		super::io::mesh_chunks_cancelable(solids, options, progress)
+	}
+
 	/// Mesh only selected artifact-local face ordinals so callers can retain
 	/// unchanged chunks across a local edit.
 	pub fn mesh_face_chunks(&self, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
 		super::io::mesh_face_chunks(self, face_indices, options)
 	}
 
+	/// Mesh selected artifact-local faces with cooperative cancellation.
+	pub fn mesh_face_chunks_cancelable(&self, face_indices: &[u32], options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
+		super::io::mesh_face_chunks_cancelable(self, face_indices, options, progress)
+	}
+
 	/// Discretize only ordered topological edges without surface meshing.
 	pub fn edge_polyline_chunks(&self, options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
 		super::io::edge_polyline_chunks(self, options)
+	}
+
+	/// Discretize ordered edges with cancellation between edge stages.
+	pub fn edge_polyline_chunks_cancelable(&self, options: crate::traits::Tessellation, progress: &ffi::CancellationToken) -> Result<Vec<crate::common::mesh::EdgePolylineChunk>, Error> {
+		super::io::edge_polyline_chunks_cancelable(self, options, progress)
 	}
 
 	/// Create a shallow occurrence sharing topology and geometry with this solid.
@@ -529,9 +548,10 @@ impl ExtrusionSession {
 }
 
 pub(crate) fn topology_snapshot_from_shape(shape: &ffi::TopoDS_Shape) -> Result<TopologySnapshot, Error> {
+	ffi::begin_operation();
 	let data = ffi::shape_topology(shape);
 	if !data.success {
-		return Err(Error::TopologyQueryFailed);
+		return Err(ffi::operation_error(Error::TopologyQueryFailed, "topology snapshot", "topology_snapshot"));
 	}
 	let face_edges = decode_adjacency(&data.face_edge_offsets, &data.face_edge_indices, data.face_tshape_ids.len(), data.edge_tshape_ids.len())?;
 	let edge_faces = decode_adjacency(&data.edge_face_offsets, &data.edge_face_indices, data.edge_tshape_ids.len(), data.face_tshape_ids.len())?;
@@ -616,9 +636,10 @@ fn boolean_build_with_progress(b: &Boolean<Solid>, progress: &ffi::CancellationT
 	}
 	let mut history = Vec::new();
 	let mut topology_history = empty_ffi_history();
+	ffi::begin_operation();
 	let inner = ffi::builder_cells(&solid_vec, clauses, progress, &mut history, &mut topology_history);
 	if inner.is_null() {
-		return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::BooleanOperationFailed });
+		return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::BooleanOperationFailed, "boolean", "occt_build") });
 	}
 	let topology_history = decode_topology_history(topology_history)?;
 

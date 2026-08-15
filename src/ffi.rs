@@ -6,6 +6,8 @@ use std::{
 	},
 };
 
+use crate::common::error::{Error, FailureCategory, OperationFailure};
+
 #[allow(clippy::too_many_arguments)]
 #[cxx::bridge(namespace = "cadrum")]
 mod ffi_bridge {
@@ -48,6 +50,18 @@ mod ffi_bridge {
 		success: bool,
 	}
 
+	/// Structured details retained from the most recent caught OCCT failure on
+	/// this native thread. Category values are decoded by `common::error`.
+	struct OperationDiagnosticData {
+		operation: String,
+		stage: String,
+		exception_type: String,
+		message: String,
+		category: u32,
+		status: i32,
+		present: bool,
+	}
+
 	// Expose Rust stream types to C++ for streambuf callbacks
 	extern "Rust" {
 		type RustReader;
@@ -62,6 +76,9 @@ mod ffi_bridge {
 
 	unsafe extern "C++" {
 		include!("cadrum/src/ffi.h");
+
+		fn clear_operation_diagnostic();
+		fn take_operation_diagnostic() -> OperationDiagnosticData;
 
 		// Opaque C++ types (accessed as cadrum::TopoDS_Shape etc. via using aliases)
 		type TopoDS_Shape;
@@ -153,8 +170,8 @@ mod ffi_bridge {
 
 		// ==================== Meshing ====================
 
-		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool) -> MeshData;
-		fn mesh_shape_faces(shape: &TopoDS_Shape, face_indices: &[u32], linear: f64, angular: f64, relative: bool, parallel: bool) -> MeshData;
+		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool, progress: &CancellationToken) -> MeshData;
+		fn mesh_shape_faces(shape: &TopoDS_Shape, face_indices: &[u32], linear: f64, angular: f64, relative: bool, parallel: bool, progress: &CancellationToken) -> MeshData;
 
 		// ==================== Topology enumeration ====================
 
@@ -222,6 +239,35 @@ mod ffi_bridge {
 
 // Re-export all bridge items so other modules can use `ffi::TopoDS_Shape` etc.
 pub use ffi_bridge::*;
+
+pub(crate) fn begin_operation() {
+	clear_operation_diagnostic();
+}
+
+pub(crate) fn operation_error(fallback: Error, operation: &'static str, stage: &'static str) -> Error {
+	let diagnostic = take_operation_diagnostic();
+	if !diagnostic.present {
+		return fallback;
+	}
+	let category = match diagnostic.category {
+		1 => FailureCategory::Cancelled,
+		2 => FailureCategory::InvalidInput,
+		3 => FailureCategory::NoSolution,
+		4 => FailureCategory::InvalidResult,
+		5 => FailureCategory::ResourceLimit,
+		6 => FailureCategory::BridgeDefect,
+		8 => FailureCategory::Io,
+		_ => FailureCategory::AlgorithmFailed,
+	};
+	Error::OperationFailed(OperationFailure {
+		operation: if diagnostic.operation.is_empty() { operation.to_owned() } else { diagnostic.operation },
+		stage: if diagnostic.stage.is_empty() { stage.to_owned() } else { diagnostic.stage },
+		exception_type: (!diagnostic.exception_type.is_empty()).then_some(diagnostic.exception_type),
+		message: diagnostic.message,
+		category,
+		status: (diagnostic.status != 0).then_some(diagnostic.status),
+	})
+}
 
 /// Thread-safe cooperative cancellation and progress shared with supported OCCT builders.
 #[derive(Clone, Default)]
@@ -308,17 +354,7 @@ pub fn rust_writer_write(writer: &mut RustWriter, buf: &[u8]) -> usize {
 	unsafe { (*writer.inner).write(buf).unwrap_or(0) }
 }
 
-// cxx opaque types default to `!Send + !Sync`. We mark them `Send` here so
-// that `UniquePtr<TopoDS_Shape>` (and friends) become `Send`, which in turn
-// makes our wrapper types (`Shape`, `Solid`, `Face`, `Edge`) auto-Send.
-//
-// Safety rationale:
-//   - `UniquePtr` gives exclusive ownership — no aliasing is possible.
-//   - These values are never shared across threads simultaneously; they are
-//     only *moved* to another thread, which is what `Send` permits.
-//   - `Sync` is intentionally NOT implemented: OCC's `Handle<Geom_XXX>`
-//     reference counts are non-atomic, so concurrent `&T` access across
-//     threads would be unsound.
-unsafe impl Send for TopoDS_Shape {}
-unsafe impl Send for TopoDS_Face {}
-unsafe impl Send for TopoDS_Edge {}
+// CXX opaque OCCT handles deliberately retain their default `!Send + !Sync`
+// traits. OCCT geometry must be created, used, and destroyed in one audited
+// worker lane; ownership wrappers are not evidence that referenced OCCT
+// geometry and caches are safe to move between threads.

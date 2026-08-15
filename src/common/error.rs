@@ -1,6 +1,33 @@
+/// Stable failure classification independent of a specific OCCT algorithm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FailureCategory {
+	Cancelled,
+	InvalidInput,
+	NoSolution,
+	InvalidResult,
+	ResourceLimit,
+	BridgeDefect,
+	AlgorithmFailed,
+	Io,
+}
+
+/// Structured details captured when an OCCT exception crosses the C++ bridge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationFailure {
+	pub operation: String,
+	pub stage: String,
+	pub exception_type: Option<String>,
+	pub message: String,
+	pub category: FailureCategory,
+	pub status: Option<i32>,
+}
+
 /// Errors that can occur during CAD operations.
 #[derive(Debug)]
 pub enum Error {
+	/// OCCT threw a caught native exception with structured diagnostics.
+	OperationFailed(OperationFailure),
+
 	/// STEP file read failed (invalid format or corrupted data).
 	StepReadFailed,
 
@@ -113,6 +140,16 @@ pub enum Error {
 impl std::fmt::Display for Error {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
+			Error::OperationFailed(failure) => {
+				write!(f, "{} failed during {}", failure.operation, failure.stage)?;
+				if let Some(exception_type) = &failure.exception_type {
+					write!(f, " ({exception_type})")?;
+				}
+				if !failure.message.is_empty() {
+					write!(f, ": {}", failure.message)?;
+				}
+				Ok(())
+			}
 			Error::StepReadFailed => write!(f, "STEP read failed"),
 			Error::BrepReadFailed => write!(f, "BRep read failed"),
 			Error::StepWriteFailed => write!(f, "STEP write failed"),
@@ -142,6 +179,44 @@ impl std::fmt::Display for Error {
 			Error::InvalidColor(s) => write!(f, "Invalid color: \"{}\"", s),
 			Error::Unknown(msg) => write!(f, "Unknown error: {}", msg),
 		}
+	}
+}
+
+impl Error {
+	/// Return a stable category suitable for adapter policy and UI recovery.
+	pub fn category(&self) -> FailureCategory {
+		match self {
+			Self::OperationFailed(failure) => failure.category,
+			Self::Cancelled => FailureCategory::Cancelled,
+			Self::InvalidEdge(_) | Self::InvalidColor(_) => FailureCategory::InvalidInput,
+			Self::ProjectionFailed(_) => FailureCategory::NoSolution,
+			Self::TopologyQueryFailed | Self::TriangulationFailed | Self::OneFailed(_) => FailureCategory::InvalidResult,
+			Self::StepReadFailed | Self::BrepReadFailed | Self::StepWriteFailed | Self::BrepWriteFailed | Self::SvgExportFailed | Self::PngExportFailed | Self::StlWriteFailed | Self::GltfWriteFailed => FailureCategory::Io,
+			Self::Unknown(_) => FailureCategory::BridgeDefect,
+			Self::BooleanOperationFailed | Self::CleanFailed | Self::HelixFailed | Self::ExtrudeFailed | Self::SweepFailed | Self::ShellFailed | Self::FilletFailed | Self::ChamferFailed | Self::LoftFailed(_) | Self::SewFailed(_) | Self::OffsetFailed(_) | Self::BsplineFailed(_) => FailureCategory::AlgorithmFailed,
+		}
+	}
+
+	/// Return the stable native/adapter stage associated with this failure.
+	pub fn stage(&self) -> &str {
+		match self {
+			Self::OperationFailed(failure) => &failure.stage,
+			Self::Cancelled => "cancelled",
+			Self::ProjectionFailed(_) => "project",
+			Self::TopologyQueryFailed => "topology_snapshot",
+			Self::TriangulationFailed => "mesh",
+			Self::StepReadFailed | Self::BrepReadFailed => "read",
+			Self::StepWriteFailed | Self::BrepWriteFailed => "write",
+			Self::InvalidEdge(_) | Self::InvalidColor(_) => "validate_input",
+			Self::SvgExportFailed | Self::PngExportFailed | Self::StlWriteFailed | Self::GltfWriteFailed => "export",
+			Self::OneFailed(_) => "validate_result",
+			_ => "occt_build",
+		}
+	}
+
+	/// Whether a caller may safely keep displaying its preceding coherent result.
+	pub fn may_keep_last_valid_result(&self) -> bool {
+		!matches!(self.category(), FailureCategory::BridgeDefect | FailureCategory::ResourceLimit)
 	}
 }
 

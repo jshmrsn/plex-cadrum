@@ -311,8 +311,8 @@ fn regenerate(src: &str, traits: &[TraitDef]) -> String {
 	let mut i = 0usize;
 	while i < lines.len() {
 		if MARKER_RE.is_match(lines[i]) {
-			for j in cursor..=i {
-				out.push(lines[j].to_string());
+			for line in &lines[cursor..=i] {
+				out.push((*line).to_string());
 			}
 			let depth = depths[i];
 			let indent: String = "\t".repeat(depth as usize);
@@ -325,8 +325,8 @@ fn regenerate(src: &str, traits: &[TraitDef]) -> String {
 			i += 1;
 		}
 	}
-	for j in cursor..lines.len() {
-		out.push(lines[j].to_string());
+	for line in &lines[cursor..] {
+		out.push((*line).to_string());
 	}
 	out.join("\n")
 }

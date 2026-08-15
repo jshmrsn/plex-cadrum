@@ -75,6 +75,7 @@
 
 // --- Mesh, classification, mass / surface properties ---
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <Poly_Triangulation.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
@@ -137,6 +138,49 @@ protected:
 private:
     const CancellationToken& progress_;
 };
+
+struct NativeDiagnosticState {
+    std::string operation;
+    std::string stage;
+    std::string exception_type;
+    std::string message;
+    uint32_t category = 0;
+    int32_t status = 0;
+    bool present = false;
+};
+
+static thread_local NativeDiagnosticState operation_diagnostic;
+
+void clear_operation_diagnostic() {
+    operation_diagnostic = NativeDiagnosticState{};
+}
+
+static void record_standard_failure(
+    const char* operation,
+    const char* stage,
+    uint32_t category,
+    const Standard_Failure& failure) {
+    operation_diagnostic.operation = operation;
+    operation_diagnostic.stage = stage;
+    operation_diagnostic.exception_type = failure.ExceptionType();
+    operation_diagnostic.message = failure.what();
+    operation_diagnostic.category = category;
+    operation_diagnostic.status = 0;
+    operation_diagnostic.present = true;
+}
+
+OperationDiagnosticData take_operation_diagnostic() {
+    OperationDiagnosticData result;
+    result.operation = rust::String(operation_diagnostic.operation);
+    result.stage = rust::String(operation_diagnostic.stage);
+    result.exception_type = rust::String(operation_diagnostic.exception_type);
+    result.message = rust::String(operation_diagnostic.message);
+    result.category = operation_diagnostic.category;
+    result.status = operation_diagnostic.status;
+    result.present = operation_diagnostic.present;
+    clear_operation_diagnostic();
+    return result;
+}
 
 // OCCT defaults to a stdout printer that emits "Statistics on Transfer" banners on STEP read/write.
 // Clear all printers at load time per the documented recommendation.
@@ -682,7 +726,8 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
         const HistoryMaps post_copy_maps(copier.Shape());
         finish_topology_history(post_copy_maps, out_topology_history);
         return shape;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -770,7 +815,8 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
         }
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -796,7 +842,8 @@ std::unique_ptr<TopoDS_Shape> transform_rotate(
         gp_Trsf trsf;
         trsf.SetRotation(gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)), angle);
         return std::make_unique<TopoDS_Shape>(shape.Moved(TopLoc_Location(trsf)));
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -817,7 +864,8 @@ std::unique_ptr<TopoDS_Shape> transform_scale(
             out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -838,7 +886,8 @@ std::unique_ptr<TopoDS_Shape> transform_mirror(
             out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -973,15 +1022,30 @@ static void append_face_mesh(
         static_cast<uint32_t>(result.indices.size()));
 }
 
+static IMeshTools_Parameters mesh_parameters(
+    double linear, double angular, bool relative, bool parallel) {
+    IMeshTools_Parameters parameters;
+    parameters.Deflection = linear;
+    parameters.Angle = angular;
+    parameters.Relative = relative;
+    parameters.InParallel = parallel;
+    return parameters;
+}
+
 MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular,
-                    bool relative, bool parallel) {
+                    bool relative, bool parallel,
+                    const CancellationToken& progress) {
     MeshData result;
     result.success = false;
     result.face_vertex_offsets.push_back(0);
     result.face_index_offsets.push_back(0);
     try {
-        BRepMesh_IncrementalMesh mesher(
-            shape, linear, relative, angular, parallel);
+        if (rust_progress_cancelled(progress)) return result;
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        BRepMesh_IncrementalMesh mesher(shape,
+            mesh_parameters(linear, angular, relative, parallel),
+            indicator->Start());
+        if (rust_progress_cancelled(progress)) return result;
         if (!mesher.IsDone()) return result;
 
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
@@ -991,7 +1055,8 @@ MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular,
                 static_cast<uint32_t>(index - 1), result);
         }
         result.success = true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return result;
     }
     return result;
@@ -1003,27 +1068,34 @@ MeshData mesh_shape_faces(
     double linear,
     double angular,
     bool relative,
-    bool parallel)
+    bool parallel,
+    const CancellationToken& progress)
 {
     MeshData result;
     result.success = false;
     result.face_vertex_offsets.push_back(0);
     result.face_index_offsets.push_back(0);
     try {
+        if (rust_progress_cancelled(progress)) return result;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
         TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
         for (uint32_t face_index : face_indices) {
+            if (rust_progress_cancelled(progress)) return result;
             if (face_index >= static_cast<uint32_t>(faces.Extent())) return result;
             BRepBuilderAPI_Copy copier(
                 faces(static_cast<int>(face_index + 1)), true, false);
             const TopoDS_Face face = TopoDS::Face(copier.Shape());
-            BRepMesh_IncrementalMesh mesher(
-                face, linear, relative, angular, parallel);
+            BRepMesh_IncrementalMesh mesher(face,
+                mesh_parameters(linear, angular, relative, parallel),
+                indicator->Start());
+            if (rust_progress_cancelled(progress)) return result;
             if (!mesher.IsDone()) return result;
             append_face_mesh(face, face_index, result);
         }
         result.success = true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return result;
     }
     return result;
@@ -1103,7 +1175,8 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
                 reinterpret_cast<uint64_t>(vertex.TShape().get()));
         }
         result.success = true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return result;
     }
     return result;
@@ -1125,7 +1198,8 @@ rust::Vec<uint32_t> shared_face_indices(
             result.push_back(static_cast<uint32_t>(first_index - 1));
             result.push_back(static_cast<uint32_t>(second_index - 1));
         }
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         result.clear();
     }
     return result;
@@ -1220,7 +1294,8 @@ bool face_project_point(const TopoDS_Face& face,
         ny = n.Y();
         nz = n.Z();
         return true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
 }
@@ -1254,7 +1329,8 @@ rust::Vec<double> edge_approximation_segments(
             out.push_back(p.Y());
             out.push_back(p.Z());
         }
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         out.clear();
     }
     return out;
@@ -1294,7 +1370,8 @@ std::unique_ptr<TopoDS_Edge> make_helix_edge(
         TopoDS_Edge edge = edgeMaker.Edge();
         BRepLib::BuildCurve3d(edge);
         return std::make_unique<TopoDS_Edge>(edge);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1315,7 +1392,8 @@ std::unique_ptr<std::vector<TopoDS_Edge>> make_polygon_edges(rust::Slice<const d
             out->push_back(TopoDS::Edge(ex.Current()));
         }
         return out;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         out->clear();
         return out;
     }
@@ -1336,7 +1414,8 @@ std::unique_ptr<TopoDS_Edge> make_circle_edge(
         BRepBuilderAPI_MakeEdge edgeMaker(circ);
         if (!edgeMaker.IsDone()) return nullptr;
         return std::make_unique<TopoDS_Edge>(edgeMaker.Edge());
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1352,7 +1431,8 @@ std::unique_ptr<TopoDS_Edge> make_line_edge(
         BRepBuilderAPI_MakeEdge edgeMaker(a, b);
         if (!edgeMaker.IsDone()) return nullptr;
         return std::make_unique<TopoDS_Edge>(edgeMaker.Edge());
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1373,7 +1453,8 @@ std::unique_ptr<TopoDS_Edge> make_arc_edge(
         BRepBuilderAPI_MakeEdge edgeMaker(maker.Value());
         if (!edgeMaker.IsDone()) return nullptr;
         return std::make_unique<TopoDS_Edge>(edgeMaker.Edge());
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1441,7 +1522,8 @@ std::unique_ptr<TopoDS_Edge> make_bspline_edge(
         BRepBuilderAPI_MakeEdge edgeMaker(curve);
         if (!edgeMaker.IsDone()) return nullptr;
         return std::make_unique<TopoDS_Edge>(edgeMaker.Edge());
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1458,7 +1540,9 @@ void edge_endpoints(const TopoDS_Edge& edge,
         gp_Pnt end = curve.Value(curve.LastParameter());
         sx = start.X(); sy = start.Y(); sz = start.Z();
         ex = end.X();   ey = end.Y();   ez = end.Z();
-    } catch (const Standard_Failure&) {}
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+    }
 }
 
 void edge_tangents(const TopoDS_Edge& edge,
@@ -1481,7 +1565,9 @@ void edge_tangents(const TopoDS_Edge& edge,
             ve.Normalize();
             ex = ve.X(); ey = ve.Y(); ez = ve.Z();
         }
-    } catch (const Standard_Failure&) {}
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+    }
 }
 
 bool edge_is_closed(const TopoDS_Edge& edge) {
@@ -1490,7 +1576,8 @@ bool edge_is_closed(const TopoDS_Edge& edge) {
         gp_Pnt p_start = curve.Value(curve.FirstParameter());
         gp_Pnt p_end   = curve.Value(curve.LastParameter());
         return p_start.Distance(p_end) < Precision::Confusion();
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
 }
@@ -1528,7 +1615,8 @@ bool edge_project_point(const TopoDS_Edge& edge,
             tx = v.X(); ty = v.Y(); tz = v.Z();
         }
         return true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
 }
@@ -1555,7 +1643,8 @@ bool edge_midpoint(const TopoDS_Edge& edge,
         px = point.X(); py = point.Y(); pz = point.Z();
         tx = tangent.X(); ty = tangent.Y(); tz = tangent.Z();
         return true;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
 }
@@ -1564,7 +1653,8 @@ std::unique_ptr<TopoDS_Edge> deep_copy_edge(const TopoDS_Edge& edge) {
     try {
         BRepBuilderAPI_Copy copier(edge);
         return std::make_unique<TopoDS_Edge>(TopoDS::Edge(copier.Shape()));
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1577,7 +1667,8 @@ static std::unique_ptr<TopoDS_Edge> transform_edge_impl(
     try {
         BRepBuilderAPI_Transform transform(edge, trsf, true);
         return std::make_unique<TopoDS_Edge>(TopoDS::Edge(transform.Shape()));
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1600,7 +1691,8 @@ std::unique_ptr<TopoDS_Edge> rotate_edge(
         gp_Trsf trsf;
         trsf.SetRotation(gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)), angle);
         return transform_edge_impl(edge, trsf);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1624,7 +1716,8 @@ std::unique_ptr<TopoDS_Edge> mirror_edge(
         gp_Trsf trsf;
         trsf.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
         return transform_edge_impl(edge, trsf);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1747,7 +1840,8 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1802,7 +1896,8 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
             out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return output;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1857,7 +1952,8 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
             out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return output;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -1911,7 +2007,8 @@ std::unique_ptr<TopoDS_Shape> make_extrude(
         }
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2023,7 +2120,8 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
             result_maps, out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
         return result;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2076,7 +2174,8 @@ std::unique_ptr<TopoDS_Shape> make_loft(
         loft.Build();
         if (!loft.IsDone()) return nullptr;
         return std::make_unique<TopoDS_Shape>(loft.Shape());
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2118,7 +2217,8 @@ std::unique_ptr<TopoDS_Shape> make_sewn_solid(
         TopoDS_Solid solid = solid_maker.Solid();
         BRepLib::OrientClosedSolid(solid);
         return std::make_unique<TopoDS_Shape>(solid);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2176,7 +2276,8 @@ std::unique_ptr<TopoDS_Shape> make_offset_shape(
             return std::make_unique<TopoDS_Shape>(solid);
         }
         return nullptr;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2359,7 +2460,8 @@ std::unique_ptr<TopoDS_Shape> make_bspline_solid(
         }
 
         return std::make_unique<TopoDS_Shape>(solid);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2468,7 +2570,8 @@ std::unique_ptr<TopoDS_Shape> read_brep_stream(
     auto shape = std::make_unique<TopoDS_Shape>();
     try {
         BinTools::Read(*shape, iss);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;  // out_consumed deliberately untouched
     }
     if (shape->IsNull()) {
@@ -2487,7 +2590,8 @@ bool write_brep_stream(const TopoDS_Shape& shape, RustWriter& writer) {
     std::ostream os(&sbuf);
     try {
         BinTools::Write(shape, os);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
     return os.good();
@@ -2637,7 +2741,8 @@ std::unique_ptr<TopoDS_Shape> read_step_color_stream(
         }
 
         return std::make_unique<TopoDS_Shape>(post);
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return nullptr;
     }
 }
@@ -2703,7 +2808,8 @@ bool write_step_color_stream(
         RustWriteStreambuf sbuf(writer);
         std::ostream os(&sbuf);
         return cafwriter.ChangeWriter().WriteStream(os) == IFSelect_RetDone;
-    } catch (const Standard_Failure&) {
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
         return false;
     }
 }
