@@ -192,6 +192,13 @@ void compound_add(TopoDS_Shape& compound, const TopoDS_Shape& child);
 // ==================== Meshing ====================
 
 MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative, bool parallel);
+MeshData mesh_shape_faces(
+	const TopoDS_Shape& shape,
+	rust::Slice<const uint32_t> face_indices,
+	double linear,
+	double angular,
+	bool relative,
+	bool parallel);
 
 // ==================== Topology enumeration ====================
 
@@ -201,6 +208,9 @@ MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bo
 std::unique_ptr<std::vector<TopoDS_Edge>> shape_edges(const TopoDS_Shape& shape);
 std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape);
 TopologyData shape_topology(const TopoDS_Shape& shape);
+rust::Vec<uint32_t> shared_face_indices(
+    const TopoDS_Shape& first,
+    const TopoDS_Shape& second);
 
 // One-shot enumeration of the boundary edges of a single face. Edges shared
 // between this face's wires are deduplicated so each edge appears once.

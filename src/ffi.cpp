@@ -879,88 +879,116 @@ void shape_bounding_box(const TopoDS_Shape& shape,
 
 // ==================== Meshing ====================
 
-MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative, bool parallel) {
+static void append_face_mesh(
+    const TopoDS_Face& face,
+    uint32_t face_index,
+    MeshData& result)
+{
+    const uint32_t global_vertex_offset =
+        static_cast<uint32_t>(result.vertices.size() / 3);
+    result.chunk_face_tshape_ids.push_back(
+        reinterpret_cast<uint64_t>(face.TShape().get()));
+    result.chunk_face_indices.push_back(face_index);
+
+    TopLoc_Location location;
+    Handle(Poly_Triangulation) triangulation =
+        BRep_Tool::Triangulation(face, location);
+    BRepLib_ToolTriangulatedShape::ComputeNormals(face, triangulation);
+    if (triangulation.IsNull() || !triangulation->HasNormals()) {
+        result.face_vertex_offsets.push_back(global_vertex_offset);
+        result.face_index_offsets.push_back(
+            static_cast<uint32_t>(result.indices.size()));
+        return;
+    }
+
+    const int nb_nodes = triangulation->NbNodes();
+    const int nb_triangles = triangulation->NbTriangles();
+    const bool reversed = face.Orientation() == TopAbs_REVERSED;
+    for (int i = 1; i <= nb_nodes; ++i) {
+        gp_Pnt point = triangulation->Node(i);
+        point.Transform(location.Transformation());
+        result.vertices.push_back(point.X());
+        result.vertices.push_back(point.Y());
+        result.vertices.push_back(point.Z());
+
+        gp_Dir normal = triangulation->Normal(i);
+        normal.Transform(location.Transformation());
+        if (reversed) normal.Reverse();
+        result.normals.push_back(normal.X());
+        result.normals.push_back(normal.Y());
+        result.normals.push_back(normal.Z());
+    }
+
+    const uint64_t face_id =
+        reinterpret_cast<uint64_t>(face.TShape().get());
+    for (int i = 1; i <= nb_triangles; ++i) {
+        const Poly_Triangle& triangle = triangulation->Triangle(i);
+        int n1, n2, n3;
+        triangle.Get(n1, n2, n3);
+        result.indices.push_back(global_vertex_offset + n1 - 1);
+        result.indices.push_back(global_vertex_offset + (reversed ? n3 : n2) - 1);
+        result.indices.push_back(global_vertex_offset + (reversed ? n2 : n3) - 1);
+        result.face_tshape_ids.push_back(face_id);
+    }
+    result.face_vertex_offsets.push_back(
+        static_cast<uint32_t>(result.vertices.size() / 3));
+    result.face_index_offsets.push_back(
+        static_cast<uint32_t>(result.indices.size()));
+}
+
+MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular,
+                    bool relative, bool parallel) {
     MeshData result;
     result.success = false;
+    result.face_vertex_offsets.push_back(0);
+    result.face_index_offsets.push_back(0);
+    try {
+        BRepMesh_IncrementalMesh mesher(
+            shape, linear, relative, angular, parallel);
+        if (!mesher.IsDone()) return result;
 
-    // BRepMesh_IncrementalMesh(shape, linDeflection, isRelative, angDeflection, isInParallel)
-    BRepMesh_IncrementalMesh mesher(shape, linear, relative, angular, parallel);
-    if (!mesher.IsDone()) {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        for (int index = 1; index <= faces.Extent(); ++index) {
+            append_face_mesh(TopoDS::Face(faces(index)),
+                static_cast<uint32_t>(index - 1), result);
+        }
+        result.success = true;
+    } catch (const Standard_Failure&) {
         return result;
     }
+    return result;
+}
 
-    uint32_t global_vertex_offset = 0;
-
-    for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
-        TopoDS_Face face = TopoDS::Face(explorer.Current());
-        TopLoc_Location location;
-        Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
-
-        // Nodal normals, taken from the underlying surface (GeomLib::NormEstim at
-        // each UV node) rather than averaged from the triangles, so curved faces
-        // carry their exact normal. OCCT falls back to averaging adjacent triangle
-        // normals at singular nodes (cone apex, sphere pole) and on faces without
-        // UV nodes. NOT Poly_Triangulation::ComputeNormals, which only averages
-        // triangle normals and would throw the surface away.
-        //
-        // Safe on a null handle, and every other path allocates the array, so the
-        // guard below rejects exactly the faces with nothing to emit: no
-        // triangulation at all, or a triangulation with no nodes.
-        BRepLib_ToolTriangulatedShape::ComputeNormals(face, triangulation);
-        if (triangulation.IsNull() || !triangulation->HasNormals()) {
-            continue;
+MeshData mesh_shape_faces(
+    const TopoDS_Shape& shape,
+    rust::Slice<const uint32_t> face_indices,
+    double linear,
+    double angular,
+    bool relative,
+    bool parallel)
+{
+    MeshData result;
+    result.success = false;
+    result.face_vertex_offsets.push_back(0);
+    result.face_index_offsets.push_back(0);
+    try {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        for (uint32_t face_index : face_indices) {
+            if (face_index >= static_cast<uint32_t>(faces.Extent())) return result;
+            BRepBuilderAPI_Copy copier(
+                faces(static_cast<int>(face_index + 1)), true, false);
+            const TopoDS_Face face = TopoDS::Face(copier.Shape());
+            BRepMesh_IncrementalMesh mesher(
+                face, linear, relative, angular, parallel);
+            if (!mesher.IsDone()) return result;
+            append_face_mesh(face, face_index, result);
         }
-
-        int nb_nodes = triangulation->NbNodes();
-        int nb_triangles = triangulation->NbTriangles();
-
-        // Shared by the nodal normals and the index winding below.
-        bool reversed = (face.Orientation() == TopAbs_REVERSED);
-
-        // Position and normal of every node in one pass.
-        for (int i = 1; i <= nb_nodes; i++) {
-            gp_Pnt p = triangulation->Node(i);
-            p.Transform(location.Transformation());
-            result.vertices.push_back(p.X());
-            result.vertices.push_back(p.Y());
-            result.vertices.push_back(p.Z());
-
-            // ComputeNormals ignores face orientation and works in the
-            // triangulation's local frame, so apply the location and the REVERSED
-            // flip here — the same rule the index winding below uses.
-            gp_Dir n = triangulation->Normal(i);
-            n.Transform(location.Transformation());
-            if (reversed) n.Reverse();
-            result.normals.push_back(n.X());
-            result.normals.push_back(n.Y());
-            result.normals.push_back(n.Z());
-        }
-
-        // Indices
-        uint64_t face_id = reinterpret_cast<uint64_t>(face.TShape().get());
-        for (int i = 1; i <= nb_triangles; i++) {
-            const Poly_Triangle& tri = triangulation->Triangle(i);
-
-            int n1, n2, n3;
-            tri.Get(n1, n2, n3);
-
-            // OCC indices are 1-based, convert to 0-based + global offset
-            if (reversed) {
-                result.indices.push_back(global_vertex_offset + n1 - 1);
-                result.indices.push_back(global_vertex_offset + n3 - 1);
-                result.indices.push_back(global_vertex_offset + n2 - 1);
-            } else {
-                result.indices.push_back(global_vertex_offset + n1 - 1);
-                result.indices.push_back(global_vertex_offset + n2 - 1);
-                result.indices.push_back(global_vertex_offset + n3 - 1);
-            }
-            result.face_tshape_ids.push_back(face_id);
-        }
-
-        global_vertex_offset += nb_nodes;
+        result.success = true;
+    } catch (const Standard_Failure&) {
+        return result;
     }
-
-    result.success = true;
     return result;
 }
 
@@ -1040,6 +1068,28 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
         result.success = true;
     } catch (const Standard_Failure&) {
         return result;
+    }
+    return result;
+}
+
+rust::Vec<uint32_t> shared_face_indices(
+    const TopoDS_Shape& first,
+    const TopoDS_Shape& second)
+{
+    rust::Vec<uint32_t> result;
+    try {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> first_faces;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> second_faces;
+        TopExp::MapShapes(first, TopAbs_FACE, first_faces);
+        TopExp::MapShapes(second, TopAbs_FACE, second_faces);
+        for (int second_index = 1; second_index <= second_faces.Extent(); ++second_index) {
+            const int first_index = first_faces.FindIndex(second_faces(second_index));
+            if (first_index < 1) continue;
+            result.push_back(static_cast<uint32_t>(first_index - 1));
+            result.push_back(static_cast<uint32_t>(second_index - 1));
+        }
+    } catch (const Standard_Failure&) {
+        result.clear();
     }
     return result;
 }

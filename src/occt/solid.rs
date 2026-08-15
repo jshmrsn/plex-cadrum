@@ -245,6 +245,24 @@ impl Solid {
 		topology_snapshot_from_shape(&self.inner)
 	}
 
+	/// Return process-local `(self, other)` face pairs with the same OCCT
+	/// occurrence (TShape and location); these are not persistent identifiers.
+	pub fn shared_face_indices(&self, other: &Self) -> Vec<(u32, u32)> {
+		ffi::shared_face_indices(&self.inner, &other.inner).chunks_exact(2).map(|pair| (pair[0], pair[1])).collect()
+	}
+
+	/// Mesh solids into topology-keyed face and edge chunks suitable for
+	/// progressive or incremental presentation.
+	pub fn mesh_chunks<'a>(solids: impl IntoIterator<Item = &'a Self>, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
+		super::io::mesh_chunks(solids, options)
+	}
+
+	/// Mesh only selected artifact-local face ordinals so callers can retain
+	/// unchanged chunks across a local edit.
+	pub fn mesh_face_chunks(&self, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
+		super::io::mesh_face_chunks(self, face_indices, options)
+	}
+
 	/// Create a shallow occurrence sharing topology and geometry with this solid.
 	pub fn shared_copy(&self) -> Self {
 		Solid::new(
@@ -263,6 +281,50 @@ impl Solid {
 			result = result.rotate(DVec3::ZERO, axis, angle);
 		}
 		result.translate(translation)
+	}
+
+	/// Create an independent full copy with an ordinal source map. This creates
+	/// new OCCT topology and is proportional to the complete shape.
+	pub fn deep_copy_with_map(&self) -> Result<Self, Error> {
+		let source = self.topology_snapshot()?;
+		let inner = ffi::deep_copy(&self.inner);
+		#[cfg(feature = "color")]
+		let colormap = remap_colormap_by_order(&self.inner, &inner, &self.colormap);
+		let mut result = Solid::new(
+			inner,
+			#[cfg(feature = "color")]
+			colormap,
+			Default::default(),
+		);
+		let copied = result.topology_snapshot()?;
+		if source.face_ids().len() != copied.face_ids().len() || source.edge_ids().len() != copied.edge_ids().len() || source.vertex_ids().len() != copied.vertex_ids().len() {
+			return Err(Error::TopologyQueryFailed);
+		}
+		let mut relations = Vec::new();
+		for (kind, count) in [(TopologyKind::Face, source.face_ids().len()), (TopologyKind::Edge, source.edge_ids().len()), (TopologyKind::Vertex, source.vertex_ids().len())] {
+			for index in 0..u32::try_from(count).map_err(|_| Error::TopologyQueryFailed)? {
+				relations.push(TopologyRelation { result: ResultTopology { kind, index }, relation: TopologyRelationKind::Unchanged, source: InputTopology { operand: 0, kind, index } });
+			}
+		}
+		result.topology_history = TopologyHistory { relations, deleted: Vec::new(), unresolved: Vec::new() };
+		Ok(result)
+	}
+
+	/// Create a detached full copy for presentation operations that may mutate
+	/// shape-local caches.
+	pub fn presentation_copy(&self) -> Result<Self, Error> {
+		let inner = ffi::deep_copy(&self.inner);
+		if inner.is_null() {
+			return Err(Error::TopologyQueryFailed);
+		}
+		#[cfg(feature = "color")]
+		let colormap = remap_colormap_by_order(&self.inner, &inner, &self.colormap);
+		Ok(Solid::new(
+			inner,
+			#[cfg(feature = "color")]
+			colormap,
+			Default::default(),
+		))
 	}
 
 	// ==================== Color accessors ====================

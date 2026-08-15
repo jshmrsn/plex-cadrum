@@ -31,6 +31,30 @@ pub struct Mesh {
 	pub edges: Vec<DVec3>,
 }
 
+/// One independently replaceable surface mesh keyed by artifact-local face
+/// ordinal. Indices are local to this chunk's vertices.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceMeshChunk {
+	pub face_index: u32,
+	pub vertices: Vec<DVec3>,
+	pub normals: Vec<DVec3>,
+	pub indices: Vec<u32>,
+}
+
+/// One ordered topological edge polyline keyed by artifact-local edge ordinal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgePolylineChunk {
+	pub edge_index: u32,
+	pub points: Vec<DVec3>,
+}
+
+/// Topology-keyed progressive presentation output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshChunks {
+	pub faces: Vec<FaceMeshChunk>,
+	pub edges: Vec<EdgePolylineChunk>,
+}
+
 /// 2D rendering scene derived from a `Mesh` viewed from a given camera.
 ///
 /// Backend-agnostic intermediate: the projection / shading / silhouette /
@@ -834,6 +858,7 @@ impl Scene2D {
 	/// them to pixels via the transform). Used by both `write_png` and
 	/// `Mesh::write_multiview_png` (which composites 4 of these into a grid).
 	#[cfg(feature = "png")]
+	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn render_to_pixmap(&self, pixmap: &mut tiny_skia::Pixmap, transform: tiny_skia::Transform, stroke_width: f32, hidden_stroke_width: f32, dash_len: f32, dash_gap: f32, anti_alias: bool) {
 		use tiny_skia::{FillRule, Paint, PathBuilder, Stroke, StrokeDash};
 
@@ -1030,7 +1055,6 @@ impl Mesh {
 // ==================== Preview helpers (scale / overlay drawing) ====================
 
 /// Glyph/label size in pixels. Shared between scale-bar labels and gnomon axis labels.
-
 /// Largest `{1, 2, 5} × 10^n` value ≤ `target` (round-down). Used for scale-bar
 /// length so the bar is guaranteed not to exceed the requested target size.
 #[cfg(feature = "png")]

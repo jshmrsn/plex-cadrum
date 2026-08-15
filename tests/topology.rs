@@ -1,4 +1,4 @@
-use cadrum::{Boolean, DVec3, Solid, TopologyKind, TopologyRelationKind};
+use cadrum::{Boolean, DVec3, Solid, Tessellation, TopologyKind, TopologyRelationKind};
 
 #[test]
 fn cube_topology_snapshot_is_bidirectionally_consistent() {
@@ -77,4 +77,48 @@ fn rigid_location_preserves_topology_tokens() {
 	let bounds = located.bounding_box();
 	assert!(bounds[0].distance(DVec3::new(10.0, 0.0, 0.0)) < 1.0e-6);
 	assert!(bounds[1].distance(DVec3::new(20.0, 10.0, 10.0)) < 1.0e-6);
+}
+
+#[test]
+fn explicit_deep_copy_returns_a_complete_ordinal_map() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let source = cube.topology_snapshot().expect("source topology");
+	let copied = cube.deep_copy_with_map().expect("deep copy");
+	let target = copied.topology_snapshot().expect("copied topology");
+
+	assert_ne!(source.face_ids(), target.face_ids());
+	assert_eq!(copied.topology_history().unresolved(), []);
+	assert_eq!(copied.topology_history().relations().len(), source.face_ids().len() + source.edge_ids().len() + source.vertex_ids().len());
+}
+
+#[test]
+fn shared_face_correspondence_includes_location_and_excludes_deep_copies() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let shared = cube.shared_copy();
+	let moved = cube.located(DVec3::Z, 0.0, DVec3::X * 20.0);
+	let copied = cube.deep_copy_with_map().expect("deep copy");
+
+	assert_eq!(cube.shared_face_indices(&shared), (0..6).map(|index| (index, index)).collect::<Vec<_>>());
+	assert!(cube.shared_face_indices(&moved).is_empty());
+	assert!(cube.shared_face_indices(&copied).is_empty());
+}
+
+#[test]
+fn keyed_mesh_chunks_cover_faces_and_ordered_edges() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let chunks = Solid::mesh_chunks([&cube], Tessellation::default()).expect("chunked mesh");
+	assert_eq!(chunks.faces.len(), 6);
+	assert_eq!(chunks.edges.len(), 12);
+	for (index, face) in chunks.faces.iter().enumerate() {
+		assert_eq!(face.face_index, index as u32);
+		assert_eq!(face.vertices.len(), face.normals.len());
+		assert!(!face.indices.is_empty());
+		assert!(face.indices.iter().all(|vertex| (*vertex as usize) < face.vertices.len()));
+	}
+	for (index, edge) in chunks.edges.iter().enumerate() {
+		assert_eq!(edge.edge_index, index as u32);
+		assert!(edge.points.len() >= 2);
+	}
+	let selected = cube.mesh_face_chunks(&[1, 4], Tessellation::default()).expect("selected faces");
+	assert_eq!(selected.iter().map(|chunk| chunk.face_index).collect::<Vec<_>>(), [1, 4]);
 }

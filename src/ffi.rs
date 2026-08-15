@@ -9,6 +9,10 @@ mod ffi_bridge {
 		normals: Vec<f64>,  // flat xyz, one per vertex
 		indices: Vec<u32>,
 		face_tshape_ids: Vec<u64>, // per-triangle TShape* address
+		chunk_face_tshape_ids: Vec<u64>,
+		chunk_face_indices: Vec<u32>,
+		face_vertex_offsets: Vec<u32>,
+		face_index_offsets: Vec<u32>,
 		success: bool,
 	}
 
@@ -141,6 +145,7 @@ mod ffi_bridge {
 		// ==================== Meshing ====================
 
 		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool) -> MeshData;
+		fn mesh_shape_faces(shape: &TopoDS_Shape, face_indices: &[u32], linear: f64, angular: f64, relative: bool, parallel: bool) -> MeshData;
 
 		// ==================== Topology enumeration ====================
 
@@ -148,6 +153,7 @@ mod ffi_bridge {
 		fn shape_faces(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Face>>;
 		fn face_edges(face: &TopoDS_Face) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_topology(shape: &TopoDS_Shape) -> TopologyData;
+		fn shared_face_indices(first: &TopoDS_Shape, second: &TopoDS_Shape) -> Vec<u32>;
 
 		fn clone_shape_handle(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 		fn clone_edge_handle(edge: &TopoDS_Edge) -> UniquePtr<TopoDS_Edge>;

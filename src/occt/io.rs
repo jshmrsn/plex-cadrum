@@ -255,3 +255,54 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 		edges,
 	})
 }
+
+pub(super) fn mesh_chunks<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
+	let solids = solids.into_iter().collect::<Vec<_>>();
+	let compound = CompoundShape::new(solids.iter().copied());
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
+	decode_mesh_chunks(compound.inner(), data, options)
+}
+
+pub(super) fn mesh_face_chunks(solid: &Solid, face_indices: &[u32], options: crate::traits::Tessellation) -> Result<Vec<crate::common::mesh::FaceMeshChunk>, Error> {
+	let data = ffi::mesh_shape_faces(solid.inner(), face_indices, options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
+	Ok(decode_mesh_chunks(solid.inner(), data, crate::traits::Tessellation { include_edges: false, ..options })?.faces)
+}
+
+fn decode_mesh_chunks(shape: &ffi::TopoDS_Shape, data: ffi::MeshData, options: crate::traits::Tessellation) -> Result<crate::common::mesh::MeshChunks, Error> {
+	use crate::common::mesh::{EdgePolylineChunk, FaceMeshChunk, MeshChunks};
+	use glam::DVec3;
+
+	let face_count = data.chunk_face_tshape_ids.len();
+	if !data.success || !data.vertices.len().is_multiple_of(3) || data.normals.len() != data.vertices.len() || data.chunk_face_indices.len() != face_count || data.face_vertex_offsets.len() != face_count + 1 || data.face_index_offsets.len() != face_count + 1 {
+		return Err(Error::TriangulationFailed);
+	}
+	let vertices = data.vertices.chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
+	let normals = data.normals.chunks_exact(3).map(|normal| DVec3::new(normal[0], normal[1], normal[2])).collect::<Vec<_>>();
+	let mut faces = Vec::with_capacity(face_count);
+	for face_index in 0..face_count {
+		let vertex_start = data.face_vertex_offsets[face_index] as usize;
+		let vertex_end = data.face_vertex_offsets[face_index + 1] as usize;
+		let index_start = data.face_index_offsets[face_index] as usize;
+		let index_end = data.face_index_offsets[face_index + 1] as usize;
+		if vertex_start > vertex_end || vertex_end > vertices.len() || index_start > index_end || index_end > data.indices.len() || !(index_end - index_start).is_multiple_of(3) || data.indices[index_start..index_end].iter().any(|index| (*index as usize) < vertex_start || (*index as usize) >= vertex_end) {
+			return Err(Error::TriangulationFailed);
+		}
+		faces.push(FaceMeshChunk {
+			face_index: data.chunk_face_indices[face_index],
+			vertices: vertices[vertex_start..vertex_end].to_vec(),
+			normals: normals[vertex_start..vertex_end].to_vec(),
+			indices: data.indices[index_start..index_end].iter().map(|index| index - data.face_vertex_offsets[face_index]).collect(),
+		});
+	}
+
+	let mut edges = Vec::new();
+	if options.include_edges {
+		for (edge_index, edge) in ffi::shape_edges(shape).iter().enumerate() {
+			let points = ffi::edge_approximation_segments(edge, options.deflection_linear, options.deflection_angular, options.relative_linear).chunks_exact(3).map(|point| DVec3::new(point[0], point[1], point[2])).collect::<Vec<_>>();
+			if points.len() >= 2 {
+				edges.push(EdgePolylineChunk { edge_index: u32::try_from(edge_index).map_err(|_| Error::TriangulationFailed)?, points });
+			}
+		}
+	}
+	Ok(MeshChunks { faces, edges })
+}
