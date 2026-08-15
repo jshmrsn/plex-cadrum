@@ -25,7 +25,7 @@ fn independent_native_pipelines_are_stable_under_parallel_stress() {
 					assert!(!archive.is_empty());
 
 					let lower = Edge::polygon(&[DVec3::new(offset, 0.0, 0.0), DVec3::new(offset + 2.0, 0.0, 0.0), DVec3::new(offset + 2.0, 2.0, 0.0), DVec3::new(offset, 2.0, 0.0)]).expect("lower profile");
-					let upper = lower.iter().cloned().map(|edge| edge.translate(DVec3::Z * 3.0)).collect::<Vec<_>>();
+					let upper = lower.iter().map(|edge| edge.shared_copy().translate(DVec3::Z * 3.0)).collect::<Vec<_>>();
 					let loft = Solid::loft([lower.iter(), upper.iter()], false).expect("serialized loft");
 					assert!(loft.volume() > 0.0);
 				}

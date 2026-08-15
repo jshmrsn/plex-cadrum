@@ -173,6 +173,15 @@ static void record_standard_failure(
     operation_diagnostic.present = true;
 }
 
+static void record_input_failure(const char* operation, const char* message) {
+    operation_diagnostic.operation = operation;
+    operation_diagnostic.stage = "validate_input";
+    operation_diagnostic.message = message;
+    operation_diagnostic.category = 2;
+    operation_diagnostic.status = 0;
+    operation_diagnostic.present = true;
+}
+
 OperationDiagnosticData take_operation_diagnostic() {
     OperationDiagnosticData result;
     result.operation = rust::String(operation_diagnostic.operation);
@@ -200,41 +209,66 @@ std::unique_ptr<TopoDS_Shape> make_half_space(
     double ox, double oy, double oz,
     double nx, double ny, double nz)
 {
-    gp_Pnt origin(ox, oy, oz);
-    gp_Dir normal(nx, ny, nz);
-    gp_Pln plane(origin, normal);
+    try {
+        const double len = std::sqrt(nx*nx + ny*ny + nz*nz);
+        if (!std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)
+            || !std::isfinite(len) || len < Precision::Confusion()) {
+            record_input_failure(__func__, "origin must be finite and normal must be finite and nonzero");
+            return nullptr;
+        }
+        gp_Pnt origin(ox, oy, oz);
+        gp_Dir normal(nx, ny, nz);
+        gp_Pln plane(origin, normal);
 
-    BRepBuilderAPI_MakeFace face_maker(plane);
-    TopoDS_Face face = face_maker.Face();
+        BRepBuilderAPI_MakeFace face_maker(plane);
+        TopoDS_Face face = face_maker.Face();
 
-    // Reference point is on the SAME side as the normal.
-    // BRepPrimAPI_MakeHalfSpace fills the ref_point side,
-    // so the solid occupies the half-space where the normal points.
-    double len = std::sqrt(nx*nx + ny*ny + nz*nz);
-    gp_Pnt ref_point(ox + nx/len, oy + ny/len, oz + nz/len);
+        // Reference point is on the SAME side as the normal.
+        // BRepPrimAPI_MakeHalfSpace fills the ref_point side,
+        // so the solid occupies the half-space where the normal points.
+        gp_Pnt ref_point(ox + nx/len, oy + ny/len, oz + nz/len);
 
-    BRepPrimAPI_MakeHalfSpace maker(face, ref_point);
-    return std::make_unique<TopoDS_Shape>(maker.Solid());
+        BRepPrimAPI_MakeHalfSpace maker(face, ref_point);
+        return std::make_unique<TopoDS_Shape>(maker.Solid());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_box(
     double x1, double y1, double z1,
     double x2, double y2, double z2)
 {
-    double minx = std::min(x1, x2);
-    double miny = std::min(y1, y2);
-    double minz = std::min(z1, z2);
-    double maxx = std::max(x1, x2);
-    double maxy = std::max(y1, y2);
-    double maxz = std::max(z1, z2);
+    try {
+        if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(z1)
+            || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
+            record_input_failure(__func__, "box corners must be finite");
+            return nullptr;
+        }
+        double minx = std::min(x1, x2);
+        double miny = std::min(y1, y2);
+        double minz = std::min(z1, z2);
+        double maxx = std::max(x1, x2);
+        double maxy = std::max(y1, y2);
+        double maxz = std::max(z1, z2);
 
-    gp_Pnt p_min(minx, miny, minz);
-    double dx = maxx - minx;
-    double dy = maxy - miny;
-    double dz = maxz - minz;
+        gp_Pnt p_min(minx, miny, minz);
+        double dx = maxx - minx;
+        double dy = maxy - miny;
+        double dz = maxz - minz;
+        if (dx < Precision::Confusion() || dy < Precision::Confusion()
+            || dz < Precision::Confusion()) {
+            record_input_failure(__func__, "box dimensions must be positive");
+            return nullptr;
+        }
 
-    BRepPrimAPI_MakeBox maker(p_min, dx, dy, dz);
-    return std::make_unique<TopoDS_Shape>(maker.Shape());
+        BRepPrimAPI_MakeBox maker(p_min, dx, dy, dz);
+        return std::make_unique<TopoDS_Shape>(maker.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_cylinder(
@@ -242,21 +276,44 @@ std::unique_ptr<TopoDS_Shape> make_cylinder(
     double dx, double dy, double dz,
     double radius, double height)
 {
-    gp_Pnt center(px, py, pz);
-    gp_Dir direction(dx, dy, dz);
-    gp_Ax2 axis(center, direction);
+    try {
+        const double direction_length = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)
+            || !std::isfinite(direction_length) || !std::isfinite(radius)
+            || !std::isfinite(height) || direction_length < Precision::Confusion()
+            || radius < Precision::Confusion() || height < Precision::Confusion()) {
+            record_input_failure(__func__, "cylinder axis, radius, and height must be finite and positive");
+            return nullptr;
+        }
+        gp_Pnt center(px, py, pz);
+        gp_Dir direction(dx, dy, dz);
+        gp_Ax2 axis(center, direction);
 
-    BRepPrimAPI_MakeCylinder maker(axis, radius, height);
-    return std::make_unique<TopoDS_Shape>(maker.Shape());
+        BRepPrimAPI_MakeCylinder maker(axis, radius, height);
+        return std::make_unique<TopoDS_Shape>(maker.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_sphere(
     double cx, double cy, double cz,
     double radius)
 {
-    gp_Pnt center(cx, cy, cz);
-    BRepPrimAPI_MakeSphere maker(center, radius);
-    return std::make_unique<TopoDS_Shape>(maker.Shape());
+    try {
+        if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(cz)
+            || !std::isfinite(radius) || radius < Precision::Confusion()) {
+            record_input_failure(__func__, "sphere center and radius must be finite and radius positive");
+            return nullptr;
+        }
+        gp_Pnt center(cx, cy, cz);
+        BRepPrimAPI_MakeSphere maker(center, radius);
+        return std::make_unique<TopoDS_Shape>(maker.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_cone(
@@ -264,11 +321,26 @@ std::unique_ptr<TopoDS_Shape> make_cone(
     double dx, double dy, double dz,
     double r1, double r2, double height)
 {
-    gp_Pnt center(px, py, pz);
-    gp_Dir direction(dx, dy, dz);
-    gp_Ax2 axis(center, direction);
-    BRepPrimAPI_MakeCone maker(axis, r1, r2, height);
-    return std::make_unique<TopoDS_Shape>(maker.Shape());
+    try {
+        const double direction_length = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)
+            || !std::isfinite(direction_length) || !std::isfinite(r1)
+            || !std::isfinite(r2) || !std::isfinite(height)
+            || direction_length < Precision::Confusion() || r1 < 0.0 || r2 < 0.0
+            || std::max(r1, r2) < Precision::Confusion()
+            || height < Precision::Confusion()) {
+            record_input_failure(__func__, "cone axis, radii, and height are invalid");
+            return nullptr;
+        }
+        gp_Pnt center(px, py, pz);
+        gp_Dir direction(dx, dy, dz);
+        gp_Ax2 axis(center, direction);
+        BRepPrimAPI_MakeCone maker(axis, r1, r2, height);
+        return std::make_unique<TopoDS_Shape>(maker.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_torus(
@@ -276,11 +348,25 @@ std::unique_ptr<TopoDS_Shape> make_torus(
     double dx, double dy, double dz,
     double r1, double r2)
 {
-    gp_Pnt center(px, py, pz);
-    gp_Dir direction(dx, dy, dz);
-    gp_Ax2 axis(center, direction);
-    BRepPrimAPI_MakeTorus maker(axis, r1, r2);
-    return std::make_unique<TopoDS_Shape>(maker.Shape());
+    try {
+        const double direction_length = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)
+            || !std::isfinite(direction_length) || !std::isfinite(r1)
+            || !std::isfinite(r2) || direction_length < Precision::Confusion()
+            || r1 < Precision::Confusion() || r2 < Precision::Confusion()
+            || r2 >= r1) {
+            record_input_failure(__func__, "torus axis and radii are invalid");
+            return nullptr;
+        }
+        gp_Pnt center(px, py, pz);
+        gp_Dir direction(dx, dy, dz);
+        gp_Ax2 axis(center, direction);
+        BRepPrimAPI_MakeTorus maker(axis, r1, r2);
+        return std::make_unique<TopoDS_Shape>(maker.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 std::unique_ptr<TopoDS_Shape> make_empty() {
@@ -2126,10 +2212,16 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Face>& open_faces,
     double thickness,
+    const CancellationToken& progress,
     rust::Vec<uint64_t>& out_history,
     HistoryData& out_topology_history)
 {
     try {
+        if (!std::isfinite(thickness) || std::abs(thickness) < Precision::Confusion()) {
+            record_input_failure(__func__, "shell thickness must be finite and nonzero");
+            return nullptr;
+        }
+        if (rust_progress_cancelled(progress)) return nullptr;
         // Empty open_faces: MakeThickSolidByJoin degenerates to a plain offset
         // shape (no cavity) because it needs at least one removed face to
         // build the first wall W1. Instead, build the solid explicitly as
@@ -2144,6 +2236,7 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
                 /*intersection=*/ false,
                 /*selfInter=*/ false,
                 /*join=*/ GeomAbs_Arc);
+            if (rust_progress_cancelled(progress)) return nullptr;
             if (!offset.IsDone()) return nullptr;
             TopoDS_Shape offset_shape = offset.Shape();
 
@@ -2166,6 +2259,7 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
 
             BRepBuilderAPI_MakeSolid solid_maker(outer);
             solid_maker.Add(TopoDS::Shell(inner.Reversed()));
+            if (rust_progress_cancelled(progress)) return nullptr;
             if (!solid_maker.IsDone()) return nullptr;
             // Sealed case: original faces are retained as identity; offset walls
             // are Generated (src is an edge) and intentionally absent.
@@ -2177,6 +2271,7 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             append_builder_topology_history(offset, solid, 0, result_maps,
                 out_topology_history);
             finish_topology_history(result_maps, out_topology_history);
+            rust_progress_set(progress, 1.0);
             return result;
         }
 
@@ -2191,7 +2286,9 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             /*intersection=*/ false,
             /*selfInter=*/ false,
             /*join=*/ GeomAbs_Arc);
+        if (rust_progress_cancelled(progress)) return nullptr;
         builder.Build();
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!builder.IsDone()) return nullptr;
         // No copy, so relay keys are final faces.
         std::unordered_map<uint64_t, uint64_t> relay;
@@ -2220,6 +2317,7 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
             HistoryKind::Vertex, {HistoryKind::Vertex}, out_topology_history);
         remove_related_deleted_topology(out_topology_history);
         finish_topology_history(result_maps, out_topology_history);
+        rust_progress_set(progress, 1.0);
         return result;
     } catch (const Standard_Failure& failure) {
         record_standard_failure(__func__, "native", 7, failure);

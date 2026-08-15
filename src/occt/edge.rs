@@ -14,7 +14,7 @@ impl Edge {
 	/// call sites must go through this function so that no null `TopoDS_Edge`
 	/// can silently enter the Rust side.
 	///
-	/// For paths where null is impossible by construction (Clone, Transform,
+	/// For paths where null is impossible by construction (shared copies, transforms,
 	/// iterators — all of which wrap an already-valid edge), callers use
 	/// `.expect("...")` with a descriptive message; the panic is unreachable
 	/// in practice but serves as a defensive marker.
@@ -30,11 +30,10 @@ impl Edge {
 	pub fn shared_copy(&self) -> Self {
 		Self { inner: ffi::clone_edge_handle(&self.inner) }
 	}
-}
 
-impl Clone for Edge {
-	fn clone(&self) -> Self {
-		Edge::try_from_ffi(ffi::deep_copy_edge(&self.inner), "Edge::clone: deep_copy_edge returned null".into()).expect("Edge::clone: unexpected null from deep_copy_edge (this is a bug)")
+	/// Create topology-independent geometry explicitly.
+	pub fn deep_copy(&self) -> Result<Self, Error> {
+		Self::try_from_ffi(ffi::deep_copy_edge(&self.inner), "deep_copy_edge returned null".into())
 	}
 }
 
@@ -102,17 +101,26 @@ impl EdgeStruct for Edge {
 	}
 
 	fn helix(radius: f64, pitch: f64, height: f64, axis: DVec3, x_ref: DVec3) -> Result<Self, Error> {
+		if ![radius, pitch, height].into_iter().all(f64::is_finite) || !axis.is_finite() || !x_ref.is_finite() || radius <= 0.0 || pitch <= 0.0 || height <= 0.0 || axis == DVec3::ZERO || x_ref == DVec3::ZERO || axis.cross(x_ref).length_squared() <= f64::EPSILON {
+			return Err(Error::InvalidEdge("helix parameters must be finite and positive, with nonparallel nonzero axis directions".into()));
+		}
+		ffi::begin_operation();
 		let inner = ffi::make_helix_edge(axis.x, axis.y, axis.z, x_ref.x, x_ref.y, x_ref.z, radius, pitch, height);
-		Edge::try_from_ffi(inner, format!("helix: degenerate params (radius={radius}, pitch={pitch}, height={height}, axis={axis:?}, x_ref={x_ref:?})"))
+		Edge::try_from_ffi(inner, format!("helix: degenerate params (radius={radius}, pitch={pitch}, height={height}, axis={axis:?}, x_ref={x_ref:?})")).map_err(|fallback| ffi::operation_error(fallback, "build helix", "occt_build"))
 	}
 
 	fn polygon<'a>(points: impl IntoIterator<Item = &'a DVec3>) -> Result<Vec<Self>, Error> {
-		let coords: Vec<f64> = points.into_iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+		let points = points.into_iter().copied().collect::<Vec<_>>();
+		if points.len() < 3 || points.iter().any(|point| !point.is_finite()) {
+			return Err(Error::InvalidEdge("polygon needs at least three finite points".into()));
+		}
+		let coords: Vec<f64> = points.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+		ffi::begin_operation();
 		let cxx_vec = ffi::make_polygon_edges(&coords);
 		// C++ 側は失敗時に空ベクタを返す (null ではない)。点数不足や
 		// OCCT の MakePolygon 失敗で empty になるので、それを InvalidEdge に変換。
 		if cxx_vec.is_empty() {
-			return Err(Error::InvalidEdge(format!("polygon: construction failed (point count = {}, need ≥ 3 non-degenerate)", coords.len() / 3)));
+			return Err(ffi::operation_error(Error::InvalidEdge(format!("polygon: construction failed (point count = {}, need ≥ 3 non-degenerate)", coords.len() / 3)), "build polygon", "occt_build"));
 		}
 		// CxxVector<TopoDS_Edge> → Vec<Edge>: pull each element out into a
 		// UniquePtr<TopoDS_Edge> via deep_copy_edge so we own the topology.
@@ -122,18 +130,30 @@ impl EdgeStruct for Edge {
 	}
 
 	fn circle(radius: f64, axis: DVec3) -> Result<Self, Error> {
+		if !radius.is_finite() || radius <= 0.0 || !axis.is_finite() || axis == DVec3::ZERO {
+			return Err(Error::InvalidEdge("circle radius must be finite and positive and its axis must be finite and nonzero".into()));
+		}
+		ffi::begin_operation();
 		let inner = ffi::make_circle_edge(axis.x, axis.y, axis.z, radius);
-		Edge::try_from_ffi(inner, format!("circle: invalid params (radius={radius}, axis={axis:?})"))
+		Edge::try_from_ffi(inner, format!("circle: invalid params (radius={radius}, axis={axis:?})")).map_err(|fallback| ffi::operation_error(fallback, "build circle", "occt_build"))
 	}
 
 	fn line(a: DVec3, b: DVec3) -> Result<Self, Error> {
+		if !a.is_finite() || !b.is_finite() || a.distance_squared(b) <= f64::EPSILON {
+			return Err(Error::InvalidEdge("line endpoints must be finite and distinct".into()));
+		}
+		ffi::begin_operation();
 		let inner = ffi::make_line_edge(a.x, a.y, a.z, b.x, b.y, b.z);
-		Edge::try_from_ffi(inner, format!("line: zero-length segment (a={a:?}, b={b:?})"))
+		Edge::try_from_ffi(inner, format!("line: zero-length segment (a={a:?}, b={b:?})")).map_err(|fallback| ffi::operation_error(fallback, "build line", "occt_build"))
 	}
 
 	fn arc_3pts(start: DVec3, mid: DVec3, end: DVec3) -> Result<Self, Error> {
+		if !start.is_finite() || !mid.is_finite() || !end.is_finite() {
+			return Err(Error::InvalidEdge("arc points must be finite".into()));
+		}
+		ffi::begin_operation();
 		let inner = ffi::make_arc_edge(start.x, start.y, start.z, mid.x, mid.y, mid.z, end.x, end.y, end.z);
-		Edge::try_from_ffi(inner, format!("arc_3pts: collinear or degenerate points (start={start:?}, mid={mid:?}, end={end:?})"))
+		Edge::try_from_ffi(inner, format!("arc_3pts: collinear or degenerate points (start={start:?}, mid={mid:?}, end={end:?})")).map_err(|fallback| ffi::operation_error(fallback, "build arc", "occt_build"))
 	}
 
 	fn bspline<'a>(points: impl IntoIterator<Item = &'a DVec3>, end: BSplineEnd) -> Result<Self, Error> {
@@ -146,6 +166,14 @@ impl EdgeStruct for Edge {
 		};
 		if pts.len() < min_required {
 			return Err(Error::InvalidEdge(format!("bspline: need ≥{} points for {:?}, got {}", min_required, end, pts.len())));
+		}
+		if pts.iter().any(|point| !point.is_finite()) {
+			return Err(Error::InvalidEdge("bspline interpolation points must be finite".into()));
+		}
+		if let BSplineEnd::Clamped { start, end } = end {
+			if !start.is_finite() || !end.is_finite() || start == DVec3::ZERO || end == DVec3::ZERO {
+				return Err(Error::InvalidEdge("clamped bspline tangents must be finite and nonzero".into()));
+			}
 		}
 
 		// Periodic では先頭と末尾が一致してはならない。OCCT は周期性を基底関数に
@@ -171,8 +199,9 @@ impl EdgeStruct for Edge {
 			BSplineEnd::Clamped { start: s, end: e } => (2u32, s.x, s.y, s.z, e.x, e.y, e.z),
 		};
 
+		ffi::begin_operation();
 		let inner = ffi::make_bspline_edge(&coords, kind, sx, sy, sz, ex, ey, ez);
-		Edge::try_from_ffi(inner, format!("bspline: OCCT GeomAPI_Interpolate failed ({} points, end={end:?})", pts.len()))
+		Edge::try_from_ffi(inner, format!("bspline: OCCT GeomAPI_Interpolate failed ({} points, end={end:?})", pts.len())).map_err(|fallback| ffi::operation_error(fallback, "build bspline", "occt_build"))
 	}
 }
 

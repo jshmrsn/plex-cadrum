@@ -28,6 +28,10 @@ pub enum Error {
 	/// OCCT threw a caught native exception with structured diagnostics.
 	OperationFailed(OperationFailure),
 
+	/// A public modeling entry point rejected malformed, non-finite, or
+	/// geometrically degenerate input before entering OCCT.
+	InvalidInput(String),
+
 	/// STEP file read failed (invalid format or corrupted data).
 	StepReadFailed,
 
@@ -150,6 +154,7 @@ impl std::fmt::Display for Error {
 				}
 				Ok(())
 			}
+			Error::InvalidInput(message) => write!(f, "Invalid modeling input: {message}"),
 			Error::StepReadFailed => write!(f, "STEP read failed"),
 			Error::BrepReadFailed => write!(f, "BRep read failed"),
 			Error::StepWriteFailed => write!(f, "STEP write failed"),
@@ -188,7 +193,7 @@ impl Error {
 		match self {
 			Self::OperationFailed(failure) => failure.category,
 			Self::Cancelled => FailureCategory::Cancelled,
-			Self::InvalidEdge(_) | Self::InvalidColor(_) => FailureCategory::InvalidInput,
+			Self::InvalidInput(_) | Self::InvalidEdge(_) | Self::InvalidColor(_) => FailureCategory::InvalidInput,
 			Self::ProjectionFailed(_) => FailureCategory::NoSolution,
 			Self::TopologyQueryFailed | Self::TriangulationFailed | Self::OneFailed(_) => FailureCategory::InvalidResult,
 			Self::StepReadFailed | Self::BrepReadFailed | Self::StepWriteFailed | Self::BrepWriteFailed | Self::SvgExportFailed | Self::PngExportFailed | Self::StlWriteFailed | Self::GltfWriteFailed => FailureCategory::Io,
@@ -207,7 +212,7 @@ impl Error {
 			Self::TriangulationFailed => "mesh",
 			Self::StepReadFailed | Self::BrepReadFailed => "read",
 			Self::StepWriteFailed | Self::BrepWriteFailed => "write",
-			Self::InvalidEdge(_) | Self::InvalidColor(_) => "validate_input",
+			Self::InvalidInput(_) | Self::InvalidEdge(_) | Self::InvalidColor(_) => "validate_input",
 			Self::SvgExportFailed | Self::PngExportFailed | Self::StlWriteFailed | Self::GltfWriteFailed => "export",
 			Self::OneFailed(_) => "validate_result",
 			_ => "occt_build",

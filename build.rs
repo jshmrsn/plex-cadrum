@@ -35,6 +35,7 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=OCCT_ROOT");
 	println!("cargo:rerun-if-env-changed=CADRUM_PREBUILT_URL");
 	println!("cargo:rerun-if-env-changed=CADRUM_BUNDLE_RUNTIME");
+	println!("cargo:rerun-if-env-changed=CADRUM_NATIVE_SANITIZERS");
 
 	if env::var("DOCS_RS").is_ok() {
 		return;
@@ -217,6 +218,12 @@ fn link_occt_libraries(occt_include: &Path, occt_lib_dir: &Path, target: &str) {
 
 	let mut build = cxx_build::bridge("src/ffi.rs");
 	build.file("src/ffi.cpp").include(occt_include).std("c++17").define("_USE_MATH_DEFINES", None);
+	if let Some(sanitizers) = native_sanitizers(target) {
+		let flag = format!("-fsanitize={sanitizers}");
+		build.flag(&flag).flag("-fno-omit-frame-pointer");
+		println!("cargo:rustc-link-arg={flag}");
+		link_macos_sanitizer_runtimes(target, sanitizers);
+	}
 
 	apply_compiler_flags(|s| {
 		build.flag(s);
@@ -241,6 +248,35 @@ fn link_occt_libraries(occt_include: &Path, occt_lib_dir: &Path, target: &str) {
 	println!("cargo:rerun-if-changed=src/ffi.rs");
 	println!("cargo:rerun-if-changed=src/ffi.h");
 	println!("cargo:rerun-if-changed=src/ffi.cpp");
+}
+
+fn native_sanitizers(target: &str) -> Option<&'static str> {
+	if target.contains("wasm32") || target.contains("windows") {
+		return None;
+	}
+	match env::var("CADRUM_NATIVE_SANITIZERS").as_deref() {
+		Ok("address") => Some("address"),
+		Ok("undefined") => Some("undefined"),
+		Ok("address,undefined") | Ok("undefined,address") => Some("address,undefined"),
+		_ => None,
+	}
+}
+
+fn link_macos_sanitizer_runtimes(target: &str, sanitizers: &str) {
+	if !target.contains("apple-darwin") {
+		return;
+	}
+	let output = std::process::Command::new("clang").arg("--print-resource-dir").output().expect("query clang resource directory for sanitizer runtime");
+	assert!(output.status.success(), "clang could not report its sanitizer runtime directory");
+	let directory = PathBuf::from(String::from_utf8(output.stdout).expect("clang resource directory is UTF-8").trim()).join("lib/darwin");
+	println!("cargo:rustc-link-search=native={}", directory.display());
+	if sanitizers.contains("address") {
+		println!("cargo:rustc-link-lib=dylib=clang_rt.asan_osx_dynamic");
+	}
+	if sanitizers.contains("undefined") {
+		println!("cargo:rustc-link-lib=dylib=clang_rt.ubsan_osx_dynamic");
+	}
+	println!("cargo:rustc-link-arg=-Wl,-rpath,{}", directory.display());
 }
 
 /// Provide OCCT into `effective_root` by downloading a prebuilt tarball for `target`.

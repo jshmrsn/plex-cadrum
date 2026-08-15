@@ -123,6 +123,7 @@ std::unique_ptr<TopoDS_Shape> builder_thick_solid(
     const TopoDS_Shape& solid,
 	const std::vector<TopoDS_Face>& open_faces,
 	double thickness,
+	const CancellationToken& progress,
 	rust::Vec<uint64_t>& out_history,
 	HistoryData& out_topology_history);
 

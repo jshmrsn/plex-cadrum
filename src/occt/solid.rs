@@ -79,7 +79,7 @@ pub struct Solid {
 	///   TShape* is globally unique so callers filter by membership).
 	///
 	/// Empty for primitives, source-edge builders (extrude/sweep/loft), I/O
-	/// reads, and after scale/mirror/Clone. Preserved across
+	/// reads, and after scale/mirror/explicit deep copy. Preserved across
 	/// translate/rotate/color. New consumers should prefer `topology_history`.
 	history: Vec<u64>,
 	/// Complete operation-local correspondence for the most recent
@@ -112,6 +112,12 @@ pub struct FaceEditSession {
 	source: Solid,
 	face_index: u32,
 	boundary: Vec<Edge>,
+}
+
+/// Prepared source topology for repeated shell-thickness updates.
+pub struct ShellSession {
+	source: Solid,
+	open_face_indices: Vec<u32>,
 }
 
 /// Exact `BRepCheck_Analyzer` result for one solid occurrence.
@@ -375,6 +381,66 @@ impl Solid {
 		self
 	}
 
+	fn from_primitive_ffi(inner: cxx::UniquePtr<ffi::TopoDS_Shape>, operation: &'static str) -> Result<Self, Error> {
+		if inner.is_null() || !ffi::shape_is_solid(&inner) {
+			return Err(ffi::operation_error(Error::InvalidInput(format!("{operation} did not produce a solid")), operation, "occt_build"));
+		}
+		Ok(Solid::new(
+			inner,
+			#[cfg(feature = "color")]
+			std::collections::HashMap::new(),
+			Default::default(),
+		))
+	}
+
+	pub fn try_cube(corner0: DVec3, corner1: DVec3) -> Result<Self, Error> {
+		if !corner0.is_finite() || !corner1.is_finite() || (corner1 - corner0).abs().min_element() <= 0.0 {
+			return Err(Error::InvalidInput("box corners must be finite and differ on every axis".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_box(corner0.x, corner0.y, corner0.z, corner1.x, corner1.y, corner1.z), "build box")
+	}
+
+	pub fn try_sphere(radius: f64) -> Result<Self, Error> {
+		if !radius.is_finite() || radius <= 0.0 {
+			return Err(Error::InvalidInput("sphere radius must be finite and positive".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_sphere(0.0, 0.0, 0.0, radius), "build sphere")
+	}
+
+	pub fn try_cylinder(radius: f64, height: DVec3) -> Result<Self, Error> {
+		if !radius.is_finite() || radius <= 0.0 || !height.is_finite() || height == DVec3::ZERO {
+			return Err(Error::InvalidInput("cylinder radius and height must be finite and nonzero".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_cylinder(0.0, 0.0, 0.0, height.x, height.y, height.z, radius, height.length()), "build cylinder")
+	}
+
+	pub fn try_cone(radius0: f64, radius1: f64, height: DVec3) -> Result<Self, Error> {
+		if !radius0.is_finite() || !radius1.is_finite() || radius0 < 0.0 || radius1 < 0.0 || radius0.max(radius1) <= 0.0 || !height.is_finite() || height == DVec3::ZERO {
+			return Err(Error::InvalidInput("cone radii and height must be finite, with a positive radius and nonzero height".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_cone(0.0, 0.0, 0.0, height.x, height.y, height.z, radius0, radius1, height.length()), "build cone")
+	}
+
+	pub fn try_torus(major_radius: f64, minor_radius: f64, axis: DVec3) -> Result<Self, Error> {
+		if !major_radius.is_finite() || !minor_radius.is_finite() || minor_radius <= 0.0 || major_radius <= minor_radius || !axis.is_finite() || axis == DVec3::ZERO {
+			return Err(Error::InvalidInput("torus radii must be finite with 0 < minor < major and the axis nonzero".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_torus(0.0, 0.0, 0.0, axis.x, axis.y, axis.z, major_radius, minor_radius), "build torus")
+	}
+
+	pub fn try_half_space(plane_origin: DVec3, plane_normal: DVec3) -> Result<Self, Error> {
+		if !plane_origin.is_finite() || !plane_normal.is_finite() || plane_normal == DVec3::ZERO {
+			return Err(Error::InvalidInput("half-space origin must be finite and its normal finite and nonzero".into()));
+		}
+		ffi::begin_operation();
+		Self::from_primitive_ffi(ffi::make_half_space(plane_origin.x, plane_origin.y, plane_origin.z, plane_normal.x, plane_normal.y, plane_normal.z), "build half space")
+	}
+
 	/// Return complete, operand-aware topology correspondence for the most
 	/// recent topology-changing operation.
 	pub fn topology_history(&self) -> &TopologyHistory {
@@ -382,6 +448,9 @@ impl Solid {
 	}
 
 	pub fn fillet_edges_cancelable<'a>(&self, radius: f64, edges: impl IntoIterator<Item = &'a Edge>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		if !radius.is_finite() || radius <= 0.0 {
+			return Err(Error::InvalidInput("fillet radius must be finite and positive".into()));
+		}
 		let mut edge_vec = ffi::edge_vec_new();
 		for edge in edges {
 			ffi::edge_vec_push(edge_vec.pin_mut(), &edge.inner);
@@ -406,6 +475,9 @@ impl Solid {
 	}
 
 	pub fn chamfer_edges_cancelable<'a>(&self, distance: f64, edges: impl IntoIterator<Item = &'a Edge>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		if !distance.is_finite() || distance <= 0.0 {
+			return Err(Error::InvalidInput("chamfer distance must be finite and positive".into()));
+		}
 		let mut edge_vec = ffi::edge_vec_new();
 		for edge in edges {
 			ffi::edge_vec_push(edge_vec.pin_mut(), &edge.inner);
@@ -429,11 +501,41 @@ impl Solid {
 		.with_topology_history(topology_history))
 	}
 
+	pub fn shell_cancelable<'a>(&self, thickness: f64, open_faces: impl IntoIterator<Item = &'a Face>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		if !thickness.is_finite() || thickness == 0.0 {
+			return Err(Error::InvalidInput("shell thickness must be finite and nonzero".into()));
+		}
+		let mut face_vec = ffi::face_vec_new();
+		for face in open_faces {
+			ffi::face_vec_push(face_vec.pin_mut(), &face.inner);
+		}
+		let mut history = Vec::new();
+		let mut topology_history = empty_ffi_history();
+		ffi::begin_operation();
+		let shape = ffi::builder_thick_solid(&self.inner, &face_vec, thickness, progress, &mut history, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::ShellFailed, "shell", "occt_build") });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		#[cfg(feature = "color")]
+		let colormap = self.remap_colormap(&shape, &history);
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			colormap,
+			history,
+		)
+		.with_topology_history(topology_history))
+	}
+
 	pub fn boolean_build_cancelable(b: &Boolean<Self>, progress: &ffi::CancellationToken) -> Result<Vec<Self>, Error> {
 		boolean_build_with_progress(b, progress)
 	}
 
 	pub fn extrude_cancelable<'a>(profile: impl IntoIterator<Item = &'a Edge>, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		if !direction.is_finite() || direction == DVec3::ZERO {
+			return Err(Error::InvalidInput("extrusion direction must be finite and nonzero".into()));
+		}
 		let mut profile_vec = ffi::edge_vec_new();
 		for edge in profile {
 			ffi::edge_vec_push(profile_vec.pin_mut(), &edge.inner);
@@ -455,6 +557,15 @@ impl Solid {
 	}
 
 	pub fn sweep_cancelable<'a, 'b, 'c>(profile: impl IntoIterator<Item = &'a Edge>, spine: impl IntoIterator<Item = &'b Edge>, orient: ProfileOrient<'c>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		match orient {
+			ProfileOrient::Up(up) if !up.is_finite() || up == DVec3::ZERO => {
+				return Err(Error::InvalidInput("sweep up direction must be finite and nonzero".into()));
+			}
+			ProfileOrient::Auxiliary([]) => {
+				return Err(Error::InvalidInput("an auxiliary sweep needs a spine".into()));
+			}
+			_ => {}
+		}
 		let mut profile_vec = ffi::edge_vec_new();
 		for edge in profile {
 			ffi::edge_vec_push(profile_vec.pin_mut(), &edge.inner);
@@ -607,6 +718,16 @@ impl Solid {
 		Ok(FaceEditSession { source, face_index, boundary })
 	}
 
+	pub fn prepare_shell(&self, open_face_indices: &[u32]) -> Result<ShellSession, Error> {
+		let face_count = self.iter_face().count();
+		if open_face_indices.iter().any(|index| *index as usize >= face_count) {
+			return Err(Error::InvalidInput("a shell opening index is outside the source topology".into()));
+		}
+		let source = self.shared_copy();
+		source.iter_face().count();
+		Ok(ShellSession { source, open_face_indices: open_face_indices.to_vec() })
+	}
+
 	/// Create an independent full copy with an ordinal source map. This creates
 	/// new OCCT topology and is proportional to the complete shape.
 	pub fn deep_copy_with_map(&self) -> Result<Self, Error> {
@@ -747,6 +868,17 @@ impl FaceEditSession {
 
 	pub fn boundary(&self) -> &[Edge] {
 		&self.boundary
+	}
+
+	pub fn source_id(&self) -> u64 {
+		self.source.id()
+	}
+}
+
+impl ShellSession {
+	pub fn update(&self, thickness: f64, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
+		let faces = self.open_face_indices.iter().map(|index| self.source.iter_face().nth(*index as usize).ok_or(Error::TopologyQueryFailed)).collect::<Result<Vec<_>, _>>()?;
+		self.source.shell_cancelable(thickness, faces, progress)
 	}
 
 	pub fn source_id(&self) -> u64 {
@@ -1023,63 +1155,27 @@ impl SolidStruct for Solid {
 	// ==================== Constructors ====================
 
 	fn cube(corner0: DVec3, corner1: DVec3) -> Solid {
-		let inner = ffi::make_box(corner0.x, corner0.y, corner0.z, corner1.x, corner1.y, corner1.z);
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_cube(corner0, corner1).expect("Solid::cube requires finite non-degenerate corners")
 	}
 
 	fn cylinder(r: f64, height: DVec3) -> Solid {
-		let inner = ffi::make_cylinder(0.0, 0.0, 0.0, height.x, height.y, height.z, r, height.length());
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_cylinder(r, height).expect("Solid::cylinder requires a positive radius and finite nonzero height")
 	}
 
 	fn sphere(radius: f64) -> Solid {
-		let inner = ffi::make_sphere(0.0, 0.0, 0.0, radius);
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_sphere(radius).expect("Solid::sphere requires a finite positive radius")
 	}
 
 	fn cone(r1: f64, r2: f64, height: DVec3) -> Solid {
-		let inner = ffi::make_cone(0.0, 0.0, 0.0, height.x, height.y, height.z, r1, r2, height.length());
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_cone(r1, r2, height).expect("Solid::cone requires valid radii and finite nonzero height")
 	}
 
 	fn torus(r1: f64, r2: f64, axis: DVec3) -> Solid {
-		let inner = ffi::make_torus(0.0, 0.0, 0.0, axis.x, axis.y, axis.z, r1, r2);
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_torus(r1, r2, axis).expect("Solid::torus requires 0 < minor radius < major radius and a nonzero axis")
 	}
 
 	fn half_space(plane_origin: DVec3, plane_normal: DVec3) -> Solid {
-		let inner = ffi::make_half_space(plane_origin.x, plane_origin.y, plane_origin.z, plane_normal.x, plane_normal.y, plane_normal.z);
-		Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			std::collections::HashMap::new(),
-			Default::default(),
-		)
+		Solid::try_half_space(plane_origin, plane_normal).expect("Solid::half_space requires a finite origin and nonzero normal")
 	}
 
 	// ==================== Topology iteration ====================
@@ -1121,26 +1217,7 @@ impl SolidStruct for Solid {
 	// ==================== Shell ====================
 
 	fn shell<'a>(&self, thickness: f64, open_faces: impl IntoIterator<Item = &'a Face>) -> Result<Self, Error> {
-		let mut face_vec = ffi::face_vec_new();
-		for f in open_faces {
-			ffi::face_vec_push(face_vec.pin_mut(), &f.inner);
-		}
-		let mut history: Vec<u64> = Default::default();
-		let mut topology_history = empty_ffi_history();
-		let shape = ffi::builder_thick_solid(&self.inner, &face_vec, thickness, &mut history, &mut topology_history);
-		if shape.is_null() {
-			return Err(Error::ShellFailed);
-		}
-		let topology_history = decode_topology_history(topology_history)?;
-		#[cfg(feature = "color")]
-		let colormap = self.remap_colormap(&shape, &history);
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			colormap,
-			history,
-		)
-		.with_topology_history(topology_history))
+		self.shell_cancelable(thickness, open_faces, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Fillet / Chamfer ====================
