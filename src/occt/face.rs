@@ -1,5 +1,6 @@
 use super::edge::Edge;
 use super::ffi;
+use crate::common::error::Error;
 use crate::traits::FaceStruct;
 use glam::DVec3;
 use std::sync::OnceLock;
@@ -29,13 +30,13 @@ impl FaceStruct for Face {
 		ffi::face_tshape_id(&self.inner)
 	}
 
-	fn project(&self, p: DVec3) -> (DVec3, DVec3) {
+	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		let (mut cpx, mut cpy, mut cpz) = (0.0_f64, 0.0_f64, 0.0_f64);
 		let (mut nx, mut ny, mut nz) = (0.0_f64, 0.0_f64, 0.0_f64);
-		// FFI returns false only on truly catastrophic OCCT failure; for a
-		// well-formed face this is effectively unreachable.
-		assert!(ffi::face_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut nx, &mut ny, &mut nz), "Face::project: BRepExtrema_ExtPF failed (this is a bug)");
-		(DVec3::new(cpx, cpy, cpz), DVec3::new(nx, ny, nz))
+		if !ffi::face_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut nx, &mut ny, &mut nz) {
+			return Err(Error::ProjectionFailed("face"));
+		}
+		Ok((DVec3::new(cpx, cpy, cpz), DVec3::new(nx, ny, nz)))
 	}
 
 	fn iter_edge(&self) -> impl Iterator<Item = &Edge> + '_ {

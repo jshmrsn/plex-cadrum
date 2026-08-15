@@ -125,13 +125,17 @@ pub struct Tessellation {
 	/// Interpret `deflection_linear` as relative to the local feature size
 	/// (each edge's bounding-box max dimension) instead of an absolute distance.
 	pub relative_linear: bool,
+	/// Include ordered topological edge polylines in the returned mesh.
+	pub include_edges: bool,
+	/// Allow OCCT to parallelize triangulation internally.
+	pub parallel: bool,
 }
 
 impl Default for Tessellation {
 	fn default() -> Self {
 		// Relative 0.2% linear + 0.5 rad angular: scale-independent and "just
 		// right" for most shapes without over-tessellating.
-		Self { deflection_linear: 0.004, deflection_angular: 0.5, relative_linear: true }
+		Self { deflection_linear: 0.004, deflection_angular: 0.5, relative_linear: true, include_edges: true, parallel: false }
 	}
 }
 
@@ -328,10 +332,11 @@ pub trait EdgeStruct: Sized + Clone + Transform {
 	/// Polyline approximation of the edge within `tolerance`, as ordered points.
 	fn approximation_segments(&self, tessellation: Tessellation) -> Vec<DVec3>;
 	/// Project `p` onto the edge and return `(closest_point, unit_tangent)`.
-	/// The tangent follows the curve's native parameter direction. Panics only
-	/// on an edge with no 3D geometric curve (an FFI-level bug, which
-	/// cadrum-built edges never produce), not on degenerate user input.
-	fn project(&self, p: DVec3) -> (DVec3, DVec3);
+	/// The tangent follows the curve's native parameter direction.
+	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error>;
+
+	/// Return the point and tangent halfway along the edge's arc length.
+	fn midpoint(&self) -> Result<(DVec3, DVec3), Error>;
 
 	/// Construct a single helical edge on a cylindrical surface centered at
 	/// the world origin.
@@ -435,7 +440,7 @@ pub trait FaceStruct: Sized {
 	/// `outward_normal` is the zero vector when the surface evaluator
 	/// cannot define a normal at the closest hit (degenerate surface
 	/// point); callers can detect this case via `normal.length() == 0`.
-	fn project(&self, p: DVec3) -> (DVec3, DVec3);
+	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error>;
 
 	/// Iterate this face's boundary edges (outer wire and any inner wires).
 	/// Each edge appears once even when shared between wires. Backends may

@@ -23,6 +23,7 @@ struct RustWriter;
 
 // Forward-declare shared structs (defined by cxx in ffi.rs.h)
 struct MeshData;
+struct TopologyData;
 
 // ==================== Shape I/O (streambuf callback) ====================
 
@@ -184,7 +185,7 @@ void compound_add(TopoDS_Shape& compound, const TopoDS_Shape& child);
 
 // ==================== Meshing ====================
 
-MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative);
+MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative, bool parallel);
 
 // ==================== Topology enumeration ====================
 
@@ -193,6 +194,7 @@ MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bo
 // Callers typically cache the result in a Rust-side OnceLock<Vec<Edge>>.
 std::unique_ptr<std::vector<TopoDS_Edge>> shape_edges(const TopoDS_Shape& shape);
 std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape);
+TopologyData shape_topology(const TopoDS_Shape& shape);
 
 // One-shot enumeration of the boundary edges of a single face. Edges shared
 // between this face's wires are deduplicated so each edge appears once.
@@ -213,6 +215,9 @@ std::unique_ptr<TopoDS_Face> clone_face_handle(const TopoDS_Face& face);
 // deflection bounds. Returns a flat xyz `Vec<f64>` (length = 3 * point count).
 rust::Vec<double> edge_approximation_segments(
     const TopoDS_Edge& edge, double linear, double angular, bool relative);
+bool edge_midpoint(const TopoDS_Edge& edge,
+    double& px, double& py, double& pz,
+    double& tx, double& ty, double& tz);
 
 // Construct a single helical edge on a cylindrical surface centered at the
 // world origin. `axis` is the cylinder axis direction; `x_ref` is the

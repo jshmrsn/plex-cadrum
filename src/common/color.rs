@@ -11,21 +11,21 @@ impl std::str::FromStr for Color {
 	type Err = super::error::Error;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		Self::from_str(s)
+		Self::parse(s)
 	}
 }
 
 #[cfg(feature = "color")]
 impl From<&str> for Color {
 	fn from(s: &str) -> Self {
-		Color::from_str(s).unwrap_or_else(|_| panic!("invalid color: {s:?}"))
+		Color::parse(s).unwrap_or_else(|_| panic!("invalid color: {s:?}"))
 	}
 }
 
 #[cfg(feature = "color")]
 impl Color {
 	/// Parse a color string: CSS named colors (e.g. `"red"`) or hex (`"#f00"`, `"#ff0000"`).
-	pub fn from_str(s: &str) -> Result<Self, super::error::Error> {
+	pub fn parse(s: &str) -> Result<Self, super::error::Error> {
 		if s.starts_with('#') {
 			return Self::from_hex(s);
 		}

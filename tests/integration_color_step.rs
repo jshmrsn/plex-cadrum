@@ -134,7 +134,7 @@ fn solid_level_styled_item_is_read_and_reaches_the_mesh() {
 
 #[test]
 fn solid_level_color_round_trips() {
-	let red = cadrum::Color::from_str("#ff0000").expect("valid hex");
+	let red = cadrum::Color::parse("#ff0000").expect("valid hex");
 	let src = Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).color(red);
 	assert_eq!(src.colormap().get(&src.id()).copied(), Some(red));
 	assert_eq!(src.colormap().len(), 1, "color() paints the solid, not each of its faces");
@@ -155,8 +155,8 @@ fn solid_level_color_round_trips() {
 /// from no single operand. The left operand decides it, as in Fusion 360.
 #[test]
 fn boolean_carries_the_left_operand_solid_color() {
-	let red = cadrum::Color::from_str("#ff0000").expect("valid hex");
-	let blue = cadrum::Color::from_str("#0000ff").expect("valid hex");
+	let red = cadrum::Color::parse("#ff0000").expect("valid hex");
+	let blue = cadrum::Color::parse("#0000ff").expect("valid hex");
 	let at = |x: f64| Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).translate(DVec3::X * x);
 
 	let mixed: Vec<Solid> = (&at(0.0).color(red) + &at(5.0).color(blue)).build_vec().expect("union should succeed");
@@ -176,7 +176,7 @@ fn boolean_carries_the_left_operand_solid_color() {
 /// scale/mirror), `fillet` via `remap_colormap` (as do shell/chamfer/clean).
 #[test]
 fn single_source_ops_carry_the_solid_color() {
-	let red = cadrum::Color::from_str("#ff0000").expect("valid hex");
+	let red = cadrum::Color::parse("#ff0000").expect("valid hex");
 	let cube = || Solid::cube(DVec3::ZERO, DVec3::splat(10.0)).color(red);
 
 	// fillet must be handed an edge of the very solid it consumes.

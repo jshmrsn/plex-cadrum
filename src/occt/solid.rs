@@ -85,6 +85,33 @@ pub struct Solid {
 	history: Vec<u64>,
 }
 
+/// One artifact-local topology index produced in a single OCCT traversal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologySnapshot {
+	face_ids: Vec<u64>,
+	edge_ids: Vec<u64>,
+	face_edges: Vec<Vec<u32>>,
+	edge_faces: Vec<Vec<u32>>,
+}
+
+impl TopologySnapshot {
+	pub fn face_ids(&self) -> &[u64] {
+		&self.face_ids
+	}
+
+	pub fn edge_ids(&self) -> &[u64] {
+		&self.edge_ids
+	}
+
+	pub fn face_edges(&self, face: u32) -> Option<&[u32]> {
+		self.face_edges.get(face as usize).map(Vec::as_slice)
+	}
+
+	pub fn edge_faces(&self, edge: u32) -> Option<&[u32]> {
+		self.edge_faces.get(edge as usize).map(Vec::as_slice)
+	}
+}
+
 impl Solid {
 	/// Create a `Solid` from a `TopoDS_Shape`.
 	///
@@ -107,6 +134,36 @@ impl Solid {
 	/// Borrow the underlying `TopoDS_Shape` (crate-internal only).
 	pub(crate) fn inner(&self) -> &ffi::TopoDS_Shape {
 		&self.inner
+	}
+
+	/// Query face/edge identity and adjacency in one OCCT traversal.
+	pub fn topology_snapshot(&self) -> Result<TopologySnapshot, Error> {
+		let data = ffi::shape_topology(&self.inner);
+		if !data.success {
+			return Err(Error::TopologyQueryFailed);
+		}
+		let face_edges = decode_adjacency(&data.face_edge_offsets, &data.face_edge_indices, data.face_tshape_ids.len(), data.edge_tshape_ids.len())?;
+		let edge_faces = decode_adjacency(&data.edge_face_offsets, &data.edge_face_indices, data.edge_tshape_ids.len(), data.face_tshape_ids.len())?;
+		Ok(TopologySnapshot { face_ids: data.face_tshape_ids, edge_ids: data.edge_tshape_ids, face_edges, edge_faces })
+	}
+
+	/// Create a shallow occurrence sharing topology and geometry with this solid.
+	pub fn shared_copy(&self) -> Self {
+		Solid::new(
+			ffi::clone_shape_handle(&self.inner),
+			#[cfg(feature = "color")]
+			self.colormap.clone(),
+			self.history.clone(),
+		)
+	}
+
+	/// Create a rigidly located occurrence without deep-copying its topology.
+	pub fn located(&self, axis: DVec3, angle: f64, translation: DVec3) -> Self {
+		let mut result = self.shared_copy();
+		if angle.abs() > f64::EPSILON {
+			result = result.rotate(DVec3::ZERO, axis, angle);
+		}
+		result.translate(translation)
 	}
 
 	// ==================== Color accessors ====================
@@ -142,6 +199,23 @@ impl Solid {
 	pub fn is_null(&self) -> bool {
 		ffi::shape_is_null(&self.inner)
 	}
+}
+
+fn decode_adjacency(offsets: &[u32], indices: &[u32], owner_count: usize, target_count: usize) -> Result<Vec<Vec<u32>>, Error> {
+	if offsets.len() != owner_count + 1 || offsets.first() != Some(&0) || offsets.last().copied() != u32::try_from(indices.len()).ok() {
+		return Err(Error::TopologyQueryFailed);
+	}
+	offsets
+		.windows(2)
+		.map(|bounds| {
+			let start = bounds[0] as usize;
+			let end = bounds[1] as usize;
+			if start > end || end > indices.len() || indices[start..end].iter().any(|index| *index as usize >= target_count) {
+				return Err(Error::TopologyQueryFailed);
+			}
+			Ok(indices[start..end].to_vec())
+		})
+		.collect()
 }
 
 impl SolidStruct for Solid {

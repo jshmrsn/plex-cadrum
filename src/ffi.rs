@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 
+#[allow(clippy::too_many_arguments)]
 #[cxx::bridge(namespace = "cadrum")]
 mod ffi_bridge {
 	// Shared struct for mesh data returned from C++
@@ -8,6 +9,16 @@ mod ffi_bridge {
 		normals: Vec<f64>,  // flat xyz, one per vertex
 		indices: Vec<u32>,
 		face_tshape_ids: Vec<u64>, // per-triangle TShape* address
+		success: bool,
+	}
+
+	struct TopologyData {
+		face_tshape_ids: Vec<u64>,
+		edge_tshape_ids: Vec<u64>,
+		face_edge_offsets: Vec<u32>,
+		face_edge_indices: Vec<u32>,
+		edge_face_offsets: Vec<u32>,
+		edge_face_indices: Vec<u32>,
 		success: bool,
 	}
 
@@ -113,13 +124,14 @@ mod ffi_bridge {
 
 		// ==================== Meshing ====================
 
-		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool) -> MeshData;
+		fn mesh_shape(shape: &TopoDS_Shape, linear: f64, angular: f64, relative: bool, parallel: bool) -> MeshData;
 
 		// ==================== Topology enumeration ====================
 
 		fn shape_edges(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_faces(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Face>>;
 		fn face_edges(face: &TopoDS_Face) -> UniquePtr<CxxVector<TopoDS_Edge>>;
+		fn shape_topology(shape: &TopoDS_Shape) -> TopologyData;
 
 		fn clone_shape_handle(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 		fn clone_edge_handle(edge: &TopoDS_Edge) -> UniquePtr<TopoDS_Edge>;
@@ -148,6 +160,7 @@ mod ffi_bridge {
 		fn edge_tangents(edge: &TopoDS_Edge, sx: &mut f64, sy: &mut f64, sz: &mut f64, ex: &mut f64, ey: &mut f64, ez: &mut f64);
 		fn edge_is_closed(edge: &TopoDS_Edge) -> bool;
 		fn edge_project_point(edge: &TopoDS_Edge, px: f64, py: f64, pz: f64, cpx: &mut f64, cpy: &mut f64, cpz: &mut f64, tx: &mut f64, ty: &mut f64, tz: &mut f64) -> bool;
+		fn edge_midpoint(edge: &TopoDS_Edge, px: &mut f64, py: &mut f64, pz: &mut f64, tx: &mut f64, ty: &mut f64, tz: &mut f64) -> bool;
 
 		fn deep_copy_edge(edge: &TopoDS_Edge) -> UniquePtr<TopoDS_Edge>;
 

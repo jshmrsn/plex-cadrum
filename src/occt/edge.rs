@@ -76,15 +76,22 @@ impl EdgeStruct for Edge {
 		ffi::edge_approximation_segments(&self.inner, tessellation.deflection_linear, tessellation.deflection_angular, tessellation.relative_linear).chunks_exact(3).map(|c| DVec3::new(c[0], c[1], c[2])).collect()
 	}
 
-	fn project(&self, p: DVec3) -> (DVec3, DVec3) {
+	fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		let (mut cpx, mut cpy, mut cpz) = (0.0_f64, 0.0_f64, 0.0_f64);
 		let (mut tx, mut ty, mut tz) = (0.0_f64, 0.0_f64, 0.0_f64);
-		// FFI returns false only on truly degenerate edges (no 3D Geom_Curve,
-		// or OCCT internal exception). All cadrum-constructed edges carry a
-		// Geom_Curve, so this is effectively unreachable — treat as a bug and
-		// fail fast rather than returning silent zero.
-		assert!(ffi::edge_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut tx, &mut ty, &mut tz), "Edge::project: edge has no 3D curve or OCCT projector threw (this is a bug)");
-		(DVec3::new(cpx, cpy, cpz), DVec3::new(tx, ty, tz))
+		if !ffi::edge_project_point(&self.inner, p.x, p.y, p.z, &mut cpx, &mut cpy, &mut cpz, &mut tx, &mut ty, &mut tz) {
+			return Err(Error::ProjectionFailed("edge"));
+		}
+		Ok((DVec3::new(cpx, cpy, cpz), DVec3::new(tx, ty, tz)))
+	}
+
+	fn midpoint(&self) -> Result<(DVec3, DVec3), Error> {
+		let (mut px, mut py, mut pz) = (0.0_f64, 0.0_f64, 0.0_f64);
+		let (mut tx, mut ty, mut tz) = (0.0_f64, 0.0_f64, 0.0_f64);
+		if !ffi::edge_midpoint(&self.inner, &mut px, &mut py, &mut pz, &mut tx, &mut ty, &mut tz) {
+			return Err(Error::ProjectionFailed("edge midpoint"));
+		}
+		Ok((DVec3::new(px, py, pz), DVec3::new(tx, ty, tz)))
 	}
 
 	fn helix(radius: f64, pitch: f64, height: f64, axis: DVec3, x_ref: DVec3) -> Result<Self, Error> {

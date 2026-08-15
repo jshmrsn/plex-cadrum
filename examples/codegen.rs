@@ -173,7 +173,7 @@ fn parse_method(line: &str, cfg: Option<String>, origin_trait: String) -> Option
 	let paren_open = rest.find('(')?;
 	let name_with_generics = rest[..paren_open].trim();
 	let name = name_with_generics.find('<').map_or_else(|| name_with_generics.to_string(), |a| name_with_generics[..a].trim().to_string());
-	let paren_close = rest.rfind(')')?;
+	let paren_close = matching_paren(rest, paren_open)?;
 	let args_str = &rest[paren_open + 1..paren_close];
 
 	let mut has_self = false;
@@ -201,6 +201,23 @@ fn parse_method(line: &str, cfg: Option<String>, origin_trait: String) -> Option
 	let sig = line[fn_idx..].trim();
 	let signature = sig.split(" where ").next().unwrap_or(sig).trim().to_string();
 	Some(Method { cfg, signature, name, args, has_self, origin_trait })
+}
+
+fn matching_paren(text: &str, open: usize) -> Option<usize> {
+	let mut depth = 0_u32;
+	for (index, byte) in text.bytes().enumerate().skip(open) {
+		match byte {
+			b'(' => depth += 1,
+			b')' => {
+				depth = depth.checked_sub(1)?;
+				if depth == 0 {
+					return Some(index);
+				}
+			}
+			_ => {}
+		}
+	}
+	None
 }
 
 /// Split an argument list by `,` while respecting `<>` and `()` nesting.

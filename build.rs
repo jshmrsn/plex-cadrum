@@ -86,7 +86,7 @@ fn main() {
 fn cargo_target_dir(target: &str) -> PathBuf {
 	let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 	let above_profile = out_dir.ancestors().nth(4).expect("unexpected OUT_DIR layout");
-	if above_profile.file_name().map_or(false, |n| n == target) {
+	if above_profile.file_name().is_some_and(|n| n == target) {
 		above_profile.parent().unwrap().to_path_buf()
 	} else {
 		above_profile.to_path_buf()
@@ -101,31 +101,31 @@ fn cargo_target_dir(target: &str) -> PathBuf {
 fn resolve_occt(effective_root: &Path, target: &str) -> [PathBuf; 2] {
 	println!("cargo:rerun-if-changed={}", effective_root.display());
 
-	match find_occt_dirs(effective_root) {
-		Some(dirs) => return dirs,
-		None => {
-			#[cfg(feature = "source")]
-			{
-				eprintln!("cargo:warning=OCCT cache miss at {} — building from source (this may take 10-30 minutes)", effective_root.display());
-				return source::occt_from_source(effective_root).expect(&format!(
-					"\nFailed to build OCCT from source for target `{}`.\n\
-					 Check that a C/C++ toolchain and CMake are installed and on PATH,\n\
-					 then re-run:\n\
-					 \n    cargo build --features source\n",
-					target
-				));
-			}
-			#[cfg(not(feature = "source"))]
-			{
-				return occt_from_prebuilt(effective_root, target).expect(&format!(
-					"\nFailed to download prebuilt OCCT for target `{}`.\n\
-					 See README for the list of supported prebuilt targets, or enable\n\
-					 the `source` feature to build OCCT from upstream sources:\n\
-					 \n    cargo build --features source\n",
-					target
-				));
-			}
-		}
+	if let Some(dirs) = find_occt_dirs(effective_root) {
+		return dirs;
+	}
+	#[cfg(feature = "source")]
+	{
+		eprintln!("cargo:warning=OCCT cache miss at {} — building from source (this may take 10-30 minutes)", effective_root.display());
+		source::occt_from_source(effective_root).unwrap_or_else(|| {
+			panic!(
+				"\nFailed to build OCCT from source for target `{target}`.\n\
+				 Check that a C/C++ toolchain and CMake are installed and on PATH,\n\
+				 then re-run:\n\
+				 \n    cargo build --features source\n"
+			)
+		})
+	}
+	#[cfg(not(feature = "source"))]
+	{
+		occt_from_prebuilt(effective_root, target).unwrap_or_else(|| {
+			panic!(
+				"\nFailed to download prebuilt OCCT for target `{target}`.\n\
+				 See README for the list of supported prebuilt targets, or enable\n\
+				 the `source` feature to build OCCT from upstream sources:\n\
+				 \n    cargo build --features source\n"
+			)
+		})
 	}
 }
 

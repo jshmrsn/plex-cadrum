@@ -19,14 +19,14 @@ fn approx_eq(a: DVec3, b: DVec3, tol: f64) -> bool {
 /// per-edge projection. This is the iterator idiom that replaces the removed
 /// `Wire::project` collection method.
 fn wire_project(wire: &[Edge], p: DVec3) -> (DVec3, DVec3) {
-	wire.iter().map(|e| e.project(p)).min_by(|(a, _), (b, _)| (*a - p).length_squared().partial_cmp(&(*b - p).length_squared()).unwrap()).unwrap_or((DVec3::ZERO, DVec3::ZERO))
+	wire.iter().filter_map(|e| e.project(p).ok()).min_by(|(a, _), (b, _)| (*a - p).length_squared().partial_cmp(&(*b - p).length_squared()).unwrap()).unwrap_or((DVec3::ZERO, DVec3::ZERO))
 }
 
 #[test]
 fn project_on_line_midpoint() {
 	// Line from -X to +X along X axis; query above the midpoint -> projects to origin.
 	let e = Edge::line(DVec3::new(-1.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0)).unwrap();
-	let (cp, tg) = e.project(DVec3::new(0.0, 1.0, 0.0));
+	let (cp, tg) = e.project(DVec3::new(0.0, 1.0, 0.0)).unwrap();
 	assert!(approx_eq(cp, DVec3::ZERO, TOL), "cp={cp:?}");
 	// Tangent is ±X (normalized).
 	assert!((tg.x.abs() - 1.0).abs() < TOL && tg.y.abs() < TOL && tg.z.abs() < TOL, "tg={tg:?}");
@@ -36,12 +36,12 @@ fn project_on_line_midpoint() {
 fn project_on_circle_returns_radius() {
 	// Unit circle in XY plane; project (2, 0, 0) -> expect (1, 0, 0).
 	let e = Edge::circle(1.0, DVec3::Z).unwrap();
-	let (cp, tg) = e.project(DVec3::new(2.0, 0.0, 0.0));
+	let (cp, tg) = e.project(DVec3::new(2.0, 0.0, 0.0)).unwrap();
 	assert!(approx_eq(cp, DVec3::new(1.0, 0.0, 0.0), TOL), "cp={cp:?}");
 	// At (1,0,0) the unit-tangent to a CCW-parameterized circle is ±Y.
 	assert!(tg.x.abs() < TOL && (tg.y.abs() - 1.0).abs() < TOL && tg.z.abs() < TOL, "tg={tg:?}");
 	// Off-plane query still lands on the circle in XY.
-	let (cp2, _) = e.project(DVec3::new(3.0, 0.0, 5.0));
+	let (cp2, _) = e.project(DVec3::new(3.0, 0.0, 5.0)).unwrap();
 	assert!(approx_eq(cp2, DVec3::new(1.0, 0.0, 0.0), TOL), "cp2={cp2:?}");
 }
 
@@ -64,7 +64,7 @@ fn project_on_bspline_converges_to_interpolant() {
 	// mean radius (≈1.0 here since all control points are unit-distant).
 	let pts = [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0), DVec3::new(-1.0, 0.0, 0.0), DVec3::new(0.0, -1.0, 0.0)];
 	let e = Edge::bspline(pts.iter(), BSplineEnd::Periodic).unwrap();
-	let (cp, tg) = e.project(DVec3::ZERO);
+	let (cp, tg) = e.project(DVec3::ZERO).unwrap();
 	// A periodic cubic B-spline interpolating 4 unit-distance points is
 	// not a perfect circle — it "cuts the corner" between knots, so the
 	// closest-to-origin point sits strictly inside the unit circle.
@@ -74,4 +74,12 @@ fn project_on_bspline_converges_to_interpolant() {
 	assert!((0.7..=1.0).contains(&r), "radius out of envelope: {r}");
 	// Tangent is unit-length.
 	assert!((tg.length() - 1.0).abs() < TOL, "|tg|={}", tg.length());
+}
+
+#[test]
+fn midpoint_uses_arc_length() {
+	let edge = Edge::line(DVec3::new(-2.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0)).unwrap();
+	let (point, tangent) = edge.midpoint().unwrap();
+	assert!(approx_eq(point, DVec3::new(1.0, 0.0, 0.0), TOL));
+	assert!(approx_eq(tangent, DVec3::X, TOL));
 }

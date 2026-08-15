@@ -80,6 +80,7 @@
 
 // --- Curve adaptation / approximation ---
 #include <BRepAdaptor_Curve.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
@@ -641,12 +642,12 @@ void shape_bounding_box(const TopoDS_Shape& shape,
 
 // ==================== Meshing ====================
 
-MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative) {
+MeshData mesh_shape(const TopoDS_Shape& shape, double linear, double angular, bool relative, bool parallel) {
     MeshData result;
     result.success = false;
 
     // BRepMesh_IncrementalMesh(shape, linDeflection, isRelative, angDeflection, isInParallel)
-    BRepMesh_IncrementalMesh mesher(shape, linear, relative, angular, false);
+    BRepMesh_IncrementalMesh mesher(shape, linear, relative, angular, parallel);
     if (!mesher.IsDone()) {
         return result;
     }
@@ -748,6 +749,53 @@ std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape)
         out->push_back(TopoDS::Face(ex.Current()));
     }
     return out;
+}
+
+TopologyData shape_topology(const TopoDS_Shape& shape) {
+    TopologyData result;
+    result.success = false;
+    try {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+
+        result.face_edge_offsets.reserve(static_cast<size_t>(faces.Extent()) + 1);
+        result.edge_face_offsets.reserve(static_cast<size_t>(edges.Extent()) + 1);
+        result.face_edge_offsets.push_back(0);
+        std::vector<std::vector<uint32_t>> edge_faces(static_cast<size_t>(edges.Extent()));
+
+        for (int face_index = 1; face_index <= faces.Extent(); ++face_index) {
+            const TopoDS_Shape& face = faces(face_index);
+            result.face_tshape_ids.push_back(reinterpret_cast<uint64_t>(face.TShape().get()));
+            NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> face_edges;
+            TopExp::MapShapes(face, TopAbs_EDGE, face_edges);
+            for (int local_index = 1; local_index <= face_edges.Extent(); ++local_index) {
+                const int edge_index = edges.FindIndex(face_edges(local_index));
+                if (edge_index < 1) return result;
+                const auto zero_based_edge = static_cast<uint32_t>(edge_index - 1);
+                result.face_edge_indices.push_back(zero_based_edge);
+                edge_faces[static_cast<size_t>(zero_based_edge)].push_back(
+                    static_cast<uint32_t>(face_index - 1));
+            }
+            result.face_edge_offsets.push_back(
+                static_cast<uint32_t>(result.face_edge_indices.size()));
+        }
+
+        result.edge_face_offsets.push_back(0);
+        for (int edge_index = 1; edge_index <= edges.Extent(); ++edge_index) {
+            const TopoDS_Shape& edge = edges(edge_index);
+            result.edge_tshape_ids.push_back(reinterpret_cast<uint64_t>(edge.TShape().get()));
+            const auto& adjacent = edge_faces[static_cast<size_t>(edge_index - 1)];
+            for (uint32_t face_index : adjacent) result.edge_face_indices.push_back(face_index);
+            result.edge_face_offsets.push_back(
+                static_cast<uint32_t>(result.edge_face_indices.size()));
+        }
+        result.success = true;
+    } catch (const Standard_Failure&) {
+        return result;
+    }
+    return result;
 }
 
 std::unique_ptr<std::vector<TopoDS_Edge>> face_edges(const TopoDS_Face& face) {
@@ -1146,6 +1194,33 @@ bool edge_project_point(const TopoDS_Edge& edge,
             v.Normalize();
             tx = v.X(); ty = v.Y(); tz = v.Z();
         }
+        return true;
+    } catch (const Standard_Failure&) {
+        return false;
+    }
+}
+
+bool edge_midpoint(const TopoDS_Edge& edge,
+    double& px, double& py, double& pz,
+    double& tx, double& ty, double& tz)
+{
+    px = 0.0; py = 0.0; pz = 0.0;
+    tx = 0.0; ty = 0.0; tz = 0.0;
+    try {
+        BRepAdaptor_Curve curve(edge);
+        const double first = curve.FirstParameter();
+        const double last = curve.LastParameter();
+        const double length = GCPnts_AbscissaPoint::Length(curve, first, last);
+        if (!std::isfinite(length) || length <= Precision::Confusion()) return false;
+        GCPnts_AbscissaPoint halfway(curve, length * 0.5, first);
+        if (!halfway.IsDone()) return false;
+        gp_Pnt point;
+        gp_Vec tangent;
+        curve.D1(halfway.Parameter(), point, tangent);
+        if (tangent.Magnitude() <= Precision::Confusion()) return false;
+        tangent.Normalize();
+        px = point.X(); py = point.Y(); pz = point.Z();
+        tx = tangent.X(); ty = tangent.Y(); tz = tangent.Z();
         return true;
     } catch (const Standard_Failure&) {
         return false;

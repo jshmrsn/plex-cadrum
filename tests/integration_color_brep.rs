@@ -46,7 +46,7 @@ fn roundtrip_after_boolean() {
 /// second so the solid count shifts every face index — an off-by-one shows up here.
 #[test]
 fn solid_and_face_colors_share_the_trailer() {
-	let blue = Color::from_str("#0000ff").expect("valid hex");
+	let blue = Color::parse("#0000ff").expect("valid hex");
 	let mut src = read_colored_box();
 	src.push(Solid::cube(DVec3::splat(100.0), DVec3::splat(110.0)).color(blue));
 
@@ -62,7 +62,7 @@ fn solid_and_face_colors_share_the_trailer() {
 /// the reader looks for the magic there and nowhere else. This is what pins it.
 #[test]
 fn trailer_begins_where_the_payload_ends() {
-	let red = Color::from_str("#ff0000").expect("valid hex");
+	let red = Color::parse("#ff0000").expect("valid hex");
 	let cube = Solid::cube(DVec3::ZERO, DVec3::ONE);
 
 	let mut plain = Vec::new();

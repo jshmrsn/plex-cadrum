@@ -191,7 +191,7 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	#[cfg(feature = "color")]
 	let face_colors = {
 		let mut map = std::collections::HashMap::new();
-		for s in solids.iter().copied() {
+		for s in &solids {
 			if let Some(&c) = s.colormap().get(&s.id()) {
 				for f in ffi::shape_faces(s.inner()).iter() {
 					map.insert(ffi::face_tshape_id(f), c);
@@ -204,7 +204,7 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	};
 
 	let compound = CompoundShape::new(solids);
-	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear);
+	let data = ffi::mesh_shape(compound.inner(), options.deflection_linear, options.deflection_angular, options.relative_linear, options.parallel);
 	if !data.success {
 		return Err(Error::TriangulationFailed);
 	}
@@ -219,16 +219,18 @@ pub(super) fn mesh<'a>(solids: impl IntoIterator<Item = &'a Solid>, options: cra
 	// surface triangulation only; edges use `deflection_linear` as an absolute
 	// chord here.
 	let mut edges: Vec<DVec3> = Vec::new();
-	for e in ffi::shape_edges(compound.inner()).iter() {
-		let segs = ffi::edge_approximation_segments(e, options.deflection_linear, options.deflection_angular, options.relative_linear);
-		if segs.len() < 6 {
-			continue; // fewer than 2 points — nothing to draw
-		}
-		if !edges.is_empty() {
-			edges.push(DVec3::NAN);
-		}
-		for c in segs.chunks_exact(3) {
-			edges.push(DVec3::new(c[0], c[1], c[2]));
+	if options.include_edges {
+		for e in ffi::shape_edges(compound.inner()).iter() {
+			let segs = ffi::edge_approximation_segments(e, options.deflection_linear, options.deflection_angular, options.relative_linear);
+			if segs.len() < 6 {
+				continue;
+			}
+			if !edges.is_empty() {
+				edges.push(DVec3::NAN);
+			}
+			for c in segs.chunks_exact(3) {
+				edges.push(DVec3::new(c[0], c[1], c[2]));
+			}
 		}
 	}
 

@@ -10,7 +10,11 @@ pub mod occt;
 // #[cfg(feature = "pure")]
 // pub mod pure;
 #[cfg(not(feature = "pure"))]
-pub use occt::{edge::Edge, face::Face, solid::Solid};
+pub use occt::{
+	edge::Edge,
+	face::Face,
+	solid::{Solid, TopologySnapshot},
+};
 pub(crate) mod traits;
 // wasm32: no-op WASI/`env` import shims (self-contained wasm). Kept alive by the
 // consumer's wasm init calling `__anchor_wasi_stub` (see its docs).
@@ -68,8 +72,11 @@ impl Edge {
 	pub fn approximation_segments(&self, tessellation: Tessellation) -> Vec<DVec3> {
 		<Self as crate::traits::EdgeStruct>::approximation_segments(self, tessellation)
 	}
-	pub fn project(&self, p: DVec3) -> (DVec3, DVec3) {
+	pub fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		<Self as crate::traits::EdgeStruct>::project(self, p)
+	}
+	pub fn midpoint(&self) -> Result<(DVec3, DVec3), Error> {
+		<Self as crate::traits::EdgeStruct>::midpoint(self)
 	}
 	pub fn helix(radius: f64, pitch: f64, height: f64, axis: DVec3, x_ref: DVec3) -> Result<crate::Edge, Error> {
 		<Self as crate::traits::EdgeStruct>::helix(radius, pitch, height, axis, x_ref)
@@ -125,7 +132,7 @@ impl Face {
 	pub fn id(&self) -> u64 {
 		<Self as crate::traits::FaceStruct>::id(self)
 	}
-	pub fn project(&self, p: DVec3) -> (DVec3, DVec3) {
+	pub fn project(&self, p: DVec3) -> Result<(DVec3, DVec3), Error> {
 		<Self as crate::traits::FaceStruct>::project(self, p)
 	}
 	pub fn iter_edge(&self) -> impl Iterator<Item = &Edge> + '_ {

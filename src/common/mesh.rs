@@ -195,10 +195,10 @@ impl Mesh {
 
 		// ---- GLB container (12-byte header + JSON chunk + optional BIN chunk) ----
 		let mut json_bytes = json.into_bytes();
-		while json_bytes.len() % 4 != 0 {
+		while !json_bytes.len().is_multiple_of(4) {
 			json_bytes.push(b' ');
 		}
-		while bin.len() % 4 != 0 {
+		while !bin.len().is_multiple_of(4) {
 			bin.push(0);
 		}
 
@@ -322,7 +322,7 @@ impl Mesh {
 /// Append `data` to the BIN buffer (4-byte aligned) and register a bufferView
 /// over it. Returns the new bufferView index.
 fn push_buffer_view(views: &mut Vec<String>, bin: &mut Vec<u8>, data: &[u8], target: u32) -> usize {
-	while bin.len() % 4 != 0 {
+	while !bin.len().is_multiple_of(4) {
 		bin.push(0);
 	}
 	let offset = bin.len();
@@ -405,7 +405,7 @@ struct OcclusionTri {
 ///
 /// - `dir` = normalized `view` (points from the scene toward the camera)
 /// - `v`   = `up` Gram-Schmidt-orthogonalized against `dir` and normalized
-///           (the "up" axis on the output SVG)
+///   (the "up" axis on the output SVG)
 /// - `u`   = `v × dir` (the "right" axis on the output SVG; right-handed)
 ///
 /// Panics with a descriptive `expect` message when any input is degenerate
@@ -1033,6 +1033,7 @@ impl Mesh {
 
 /// Largest `{1, 2, 5} × 10^n` value ≤ `target` (round-down). Used for scale-bar
 /// length so the bar is guaranteed not to exceed the requested target size.
+#[cfg(feature = "png")]
 fn nice_step(target: f64) -> f64 {
 	if !target.is_finite() || target <= 0.0 {
 		return 1.0;
@@ -1061,6 +1062,7 @@ fn nice_step(target: f64) -> f64 {
 // 'X' と 'Y' は内部分岐があり厳密な Eulerian 一筆書きではないが、ポリライン上で中央
 // を 2 度通る (重ね描き) ことで単一列に詰めている — AA 描画では重ね描きと 1 度描きが
 // 視覚的に同一なので問題ない。'1' は base を持たず stem + flag のみで認識可能とした。
+#[cfg(feature = "png")]
 fn glyph_polyline(c: char) -> &'static [[f32; 2]] {
 	match c {
 		'0' => &[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]],
