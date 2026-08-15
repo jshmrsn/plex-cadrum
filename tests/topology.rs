@@ -1,4 +1,4 @@
-use cadrum::{Boolean, DVec3, ProfileOrient, Solid, Tessellation, TopologyKind, TopologyRelationKind};
+use cadrum::{Boolean, CurveGeometryKind, DVec3, ProfileOrient, Solid, SurfaceGeometryKind, Tessellation, TopologyKind, TopologyQueryOptions, TopologyRelationKind};
 
 #[test]
 fn cube_topology_snapshot_is_bidirectionally_consistent() {
@@ -17,6 +17,35 @@ fn cube_topology_snapshot_is_bidirectionally_consistent() {
 	}
 	for edge in 0..topology.edge_ids().len() as u32 {
 		assert_eq!(topology.edge_faces(edge).expect("edge adjacency").len(), 2);
+	}
+}
+
+#[test]
+fn topology_snapshot_batches_occurrences_adjacency_and_query_facts() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let topology = cube.topology_snapshot_with_options(TopologyQueryOptions::MEASUREMENT).expect("query cube facts");
+
+	for face in 0..6 {
+		let facts = topology.face_facts(face).expect("face facts");
+		assert_eq!(facts.token.ordinal, face);
+		assert_eq!(facts.geometry, Some(SurfaceGeometryKind::Plane));
+		assert!(facts.representative_point.expect("face point").into_iter().all(f64::is_finite));
+		assert!(facts.normal.expect("face normal").into_iter().all(f64::is_finite));
+		assert!((facts.area.expect("face area") - 100.0).abs() < 1.0e-8);
+	}
+	for edge in 0..12 {
+		let facts = topology.edge_facts(edge).expect("edge facts");
+		assert_eq!(facts.token.ordinal, edge);
+		assert_eq!(facts.geometry, Some(CurveGeometryKind::Line));
+		assert_eq!(facts.vertices.len(), 2);
+		assert!(facts.manifold);
+		assert!(!facts.seam);
+		assert!((facts.length.expect("edge length") - 10.0).abs() < 1.0e-8);
+	}
+	for vertex in 0..8 {
+		let facts = topology.vertex_facts(vertex).expect("vertex facts");
+		assert_eq!(facts.token.ordinal, vertex);
+		assert!(facts.point.expect("vertex point").into_iter().all(f64::is_finite));
 	}
 }
 

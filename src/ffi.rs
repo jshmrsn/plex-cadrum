@@ -26,12 +26,32 @@ mod ffi_bridge {
 
 	struct TopologyData {
 		face_tshape_ids: Vec<u64>,
+		face_location_hashes: Vec<u64>,
+		face_orientations: Vec<u32>,
 		edge_tshape_ids: Vec<u64>,
+		edge_location_hashes: Vec<u64>,
+		edge_orientations: Vec<u32>,
 		vertex_tshape_ids: Vec<u64>,
+		vertex_location_hashes: Vec<u64>,
+		vertex_orientations: Vec<u32>,
 		face_edge_offsets: Vec<u32>,
 		face_edge_indices: Vec<u32>,
 		edge_face_offsets: Vec<u32>,
 		edge_face_indices: Vec<u32>,
+		edge_vertex_offsets: Vec<u32>,
+		edge_vertex_indices: Vec<u32>,
+		face_geometry_kinds: Vec<u32>,
+		face_fact_flags: Vec<u32>,
+		face_points: Vec<f64>,
+		face_normals: Vec<f64>,
+		face_areas: Vec<f64>,
+		edge_geometry_kinds: Vec<u32>,
+		edge_fact_flags: Vec<u32>,
+		edge_points: Vec<f64>,
+		edge_tangents: Vec<f64>,
+		edge_lengths: Vec<f64>,
+		vertex_fact_flags: Vec<u32>,
+		vertex_points: Vec<f64>,
 		success: bool,
 	}
 
@@ -186,7 +206,7 @@ mod ffi_bridge {
 		fn shape_edges(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_faces(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Face>>;
 		fn face_edges(face: &TopoDS_Face) -> UniquePtr<CxxVector<TopoDS_Edge>>;
-		fn shape_topology(shape: &TopoDS_Shape) -> TopologyData;
+		fn shape_topology(shape: &TopoDS_Shape, query_flags: u32) -> TopologyData;
 		fn shape_validation(shape: &TopoDS_Shape) -> ValidationData;
 		fn shared_face_indices(first: &TopoDS_Shape, second: &TopoDS_Shape) -> Vec<u32>;
 

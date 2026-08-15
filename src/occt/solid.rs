@@ -202,14 +202,102 @@ impl TopologyHistory {
 	}
 }
 
+/// Request flags for an artifact-local topology traversal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TopologyQueryOptions {
+	pub frames: bool,
+	pub measurements: bool,
+	pub geometry: bool,
+}
+
+impl TopologyQueryOptions {
+	pub const INTERACTION: Self = Self { frames: true, measurements: false, geometry: true };
+	pub const MEASUREMENT: Self = Self { frames: true, measurements: true, geometry: true };
+
+	fn bits(self) -> u32 {
+		u32::from(self.frames) | (u32::from(self.measurements) << 1) | (u32::from(self.geometry) << 2)
+	}
+}
+
+/// An occurrence-aware token scoped to one exact artifact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TopologyOccurrenceToken {
+	pub tshape_id: u64,
+	pub location_hash: u64,
+	pub orientation: u32,
+	pub ordinal: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceGeometryKind {
+	Plane,
+	Cylinder,
+	Cone,
+	Sphere,
+	Torus,
+	Bezier,
+	BSpline,
+	Revolution,
+	Extrusion,
+	Offset,
+	Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurveGeometryKind {
+	Line,
+	Circle,
+	Ellipse,
+	Hyperbola,
+	Parabola,
+	Bezier,
+	BSpline,
+	Offset,
+	Other,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceTopologyFacts {
+	pub token: TopologyOccurrenceToken,
+	pub geometry: Option<SurfaceGeometryKind>,
+	pub representative_point: Option<[f64; 3]>,
+	pub normal: Option<[f64; 3]>,
+	pub area: Option<f64>,
+	pub closed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EdgeTopologyFacts {
+	pub token: TopologyOccurrenceToken,
+	pub geometry: Option<CurveGeometryKind>,
+	pub midpoint: Option<[f64; 3]>,
+	pub tangent: Option<[f64; 3]>,
+	pub length: Option<f64>,
+	pub vertices: Vec<u32>,
+	pub closed: bool,
+	pub degenerate: bool,
+	pub seam: bool,
+	pub manifold: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VertexTopologyFacts {
+	pub token: TopologyOccurrenceToken,
+	pub point: Option<[f64; 3]>,
+}
+
 /// One artifact-local topology index produced in a single OCCT traversal.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TopologySnapshot {
 	face_ids: Vec<u64>,
 	edge_ids: Vec<u64>,
 	vertex_ids: Vec<u64>,
 	face_edges: Vec<Vec<u32>>,
 	edge_faces: Vec<Vec<u32>>,
+	edge_vertices: Vec<Vec<u32>>,
+	face_facts: Vec<FaceTopologyFacts>,
+	edge_facts: Vec<EdgeTopologyFacts>,
+	vertex_facts: Vec<VertexTopologyFacts>,
 }
 
 impl TopologySnapshot {
@@ -231,6 +319,22 @@ impl TopologySnapshot {
 
 	pub fn edge_faces(&self, edge: u32) -> Option<&[u32]> {
 		self.edge_faces.get(edge as usize).map(Vec::as_slice)
+	}
+
+	pub fn edge_vertices(&self, edge: u32) -> Option<&[u32]> {
+		self.edge_vertices.get(edge as usize).map(Vec::as_slice)
+	}
+
+	pub fn face_facts(&self, face: u32) -> Option<&FaceTopologyFacts> {
+		self.face_facts.get(face as usize)
+	}
+
+	pub fn edge_facts(&self, edge: u32) -> Option<&EdgeTopologyFacts> {
+		self.edge_facts.get(edge as usize)
+	}
+
+	pub fn vertex_facts(&self, vertex: u32) -> Option<&VertexTopologyFacts> {
+		self.vertex_facts.get(vertex as usize)
 	}
 }
 
@@ -372,6 +476,11 @@ impl Solid {
 	/// Query face/edge identity and adjacency in one OCCT traversal.
 	pub fn topology_snapshot(&self) -> Result<TopologySnapshot, Error> {
 		topology_snapshot_from_shape(&self.inner)
+	}
+
+	/// Query occurrence-aware topology plus the requested immutable facts in one traversal.
+	pub fn topology_snapshot_with_options(&self, options: TopologyQueryOptions) -> Result<TopologySnapshot, Error> {
+		topology_snapshot_from_shape_with_options(&self.inner, options)
 	}
 
 	/// Run OCCT's exact B-rep analyzer and report invalid subshape counts.
@@ -603,14 +712,138 @@ impl FaceEditSession {
 }
 
 pub(crate) fn topology_snapshot_from_shape(shape: &ffi::TopoDS_Shape) -> Result<TopologySnapshot, Error> {
+	topology_snapshot_from_shape_with_options(shape, TopologyQueryOptions::default())
+}
+
+fn topology_snapshot_from_shape_with_options(shape: &ffi::TopoDS_Shape, options: TopologyQueryOptions) -> Result<TopologySnapshot, Error> {
 	ffi::begin_operation();
-	let data = ffi::shape_topology(shape);
+	let data = ffi::shape_topology(shape, options.bits());
 	if !data.success {
 		return Err(ffi::operation_error(Error::TopologyQueryFailed, "topology snapshot", "topology_snapshot"));
 	}
 	let face_edges = decode_adjacency(&data.face_edge_offsets, &data.face_edge_indices, data.face_tshape_ids.len(), data.edge_tshape_ids.len())?;
 	let edge_faces = decode_adjacency(&data.edge_face_offsets, &data.edge_face_indices, data.edge_tshape_ids.len(), data.face_tshape_ids.len())?;
-	Ok(TopologySnapshot { face_ids: data.face_tshape_ids, edge_ids: data.edge_tshape_ids, vertex_ids: data.vertex_tshape_ids, face_edges, edge_faces })
+	let edge_vertices = decode_adjacency(&data.edge_vertex_offsets, &data.edge_vertex_indices, data.edge_tshape_ids.len(), data.vertex_tshape_ids.len())?;
+	let face_tokens = decode_tokens(&data.face_tshape_ids, &data.face_location_hashes, &data.face_orientations)?;
+	let edge_tokens = decode_tokens(&data.edge_tshape_ids, &data.edge_location_hashes, &data.edge_orientations)?;
+	let vertex_tokens = decode_tokens(&data.vertex_tshape_ids, &data.vertex_location_hashes, &data.vertex_orientations)?;
+	let face_facts = decode_face_facts(&data, &face_tokens, options)?;
+	let edge_facts = decode_edge_facts(&data, &edge_tokens, &edge_vertices, options)?;
+	let vertex_facts = decode_vertex_facts(&data, &vertex_tokens, options)?;
+	Ok(TopologySnapshot { face_ids: data.face_tshape_ids, edge_ids: data.edge_tshape_ids, vertex_ids: data.vertex_tshape_ids, face_edges, edge_faces, edge_vertices, face_facts, edge_facts, vertex_facts })
+}
+
+fn decode_tokens(ids: &[u64], locations: &[u64], orientations: &[u32]) -> Result<Vec<TopologyOccurrenceToken>, Error> {
+	if locations.len() != ids.len() || orientations.len() != ids.len() {
+		return Err(Error::TopologyQueryFailed);
+	}
+	ids.iter().zip(locations).zip(orientations).enumerate().map(|(ordinal, ((tshape_id, location_hash), orientation))| Ok(TopologyOccurrenceToken { tshape_id: *tshape_id, location_hash: *location_hash, orientation: *orientation, ordinal: u32::try_from(ordinal).map_err(|_| Error::TopologyQueryFailed)? })).collect()
+}
+
+fn decode_face_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken], options: TopologyQueryOptions) -> Result<Vec<FaceTopologyFacts>, Error> {
+	let count = tokens.len();
+	if (options.frames || options.measurements || options.geometry) && (data.face_geometry_kinds.len() != count || data.face_fact_flags.len() != count || data.face_points.len() != count * 3 || data.face_normals.len() != count * 3 || data.face_areas.len() != count) {
+		return Err(Error::TopologyQueryFailed);
+	}
+	tokens
+		.iter()
+		.enumerate()
+		.map(|(index, token)| {
+			let flags = data.face_fact_flags.get(index).copied().unwrap_or(0);
+			Ok(FaceTopologyFacts {
+				token: *token,
+				geometry: data.face_geometry_kinds.get(index).copied().map(decode_surface_kind).transpose()?.flatten(),
+				representative_point: ((flags & 1) != 0).then(|| decode_point(&data.face_points, index)).transpose()?,
+				normal: ((flags & 1) != 0).then(|| decode_point(&data.face_normals, index)).transpose()?,
+				area: ((flags & 2) != 0).then(|| data.face_areas[index]),
+				closed: (flags & 4) != 0,
+			})
+		})
+		.collect()
+}
+
+fn decode_edge_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken], edge_vertices: &[Vec<u32>], options: TopologyQueryOptions) -> Result<Vec<EdgeTopologyFacts>, Error> {
+	let count = tokens.len();
+	if (options.frames || options.measurements || options.geometry) && (data.edge_geometry_kinds.len() != count || data.edge_fact_flags.len() != count || data.edge_points.len() != count * 3 || data.edge_tangents.len() != count * 3 || data.edge_lengths.len() != count) {
+		return Err(Error::TopologyQueryFailed);
+	}
+	tokens
+		.iter()
+		.enumerate()
+		.map(|(index, token)| {
+			let flags = data.edge_fact_flags.get(index).copied().unwrap_or(0);
+			Ok(EdgeTopologyFacts {
+				token: *token,
+				geometry: data.edge_geometry_kinds.get(index).copied().map(decode_curve_kind).transpose()?.flatten(),
+				midpoint: ((flags & 1) != 0).then(|| decode_point(&data.edge_points, index)).transpose()?,
+				tangent: ((flags & 1) != 0).then(|| decode_point(&data.edge_tangents, index)).transpose()?,
+				length: ((flags & 2) != 0).then(|| data.edge_lengths[index]),
+				vertices: edge_vertices[index].clone(),
+				closed: (flags & 4) != 0,
+				degenerate: (flags & 8) != 0,
+				seam: (flags & 16) != 0,
+				manifold: (flags & 32) != 0,
+			})
+		})
+		.collect()
+}
+
+fn decode_vertex_facts(data: &ffi::TopologyData, tokens: &[TopologyOccurrenceToken], options: TopologyQueryOptions) -> Result<Vec<VertexTopologyFacts>, Error> {
+	if options.frames && (data.vertex_fact_flags.len() != tokens.len() || data.vertex_points.len() != tokens.len() * 3) {
+		return Err(Error::TopologyQueryFailed);
+	}
+	tokens
+		.iter()
+		.enumerate()
+		.map(|(index, token)| {
+			let flags = data.vertex_fact_flags.get(index).copied().unwrap_or(0);
+			Ok(VertexTopologyFacts { token: *token, point: ((flags & 1) != 0).then(|| decode_point(&data.vertex_points, index)).transpose()? })
+		})
+		.collect()
+}
+
+fn decode_point(values: &[f64], index: usize) -> Result<[f64; 3], Error> {
+	let start = index.checked_mul(3).ok_or(Error::TopologyQueryFailed)?;
+	let point: [f64; 3] = values.get(start..start + 3).ok_or(Error::TopologyQueryFailed)?.try_into().map_err(|_| Error::TopologyQueryFailed)?;
+	if point.into_iter().all(f64::is_finite) {
+		Ok(point)
+	} else {
+		Err(Error::TopologyQueryFailed)
+	}
+}
+
+fn decode_surface_kind(value: u32) -> Result<Option<SurfaceGeometryKind>, Error> {
+	Ok(match value {
+		0 => None,
+		1 => Some(SurfaceGeometryKind::Plane),
+		2 => Some(SurfaceGeometryKind::Cylinder),
+		3 => Some(SurfaceGeometryKind::Cone),
+		4 => Some(SurfaceGeometryKind::Sphere),
+		5 => Some(SurfaceGeometryKind::Torus),
+		6 => Some(SurfaceGeometryKind::Bezier),
+		7 => Some(SurfaceGeometryKind::BSpline),
+		8 => Some(SurfaceGeometryKind::Revolution),
+		9 => Some(SurfaceGeometryKind::Extrusion),
+		10 => Some(SurfaceGeometryKind::Offset),
+		11 => Some(SurfaceGeometryKind::Other),
+		_ => return Err(Error::TopologyQueryFailed),
+	})
+}
+
+fn decode_curve_kind(value: u32) -> Result<Option<CurveGeometryKind>, Error> {
+	Ok(match value {
+		0 => None,
+		1 => Some(CurveGeometryKind::Line),
+		2 => Some(CurveGeometryKind::Circle),
+		3 => Some(CurveGeometryKind::Ellipse),
+		4 => Some(CurveGeometryKind::Hyperbola),
+		5 => Some(CurveGeometryKind::Parabola),
+		6 => Some(CurveGeometryKind::Bezier),
+		7 => Some(CurveGeometryKind::BSpline),
+		8 => Some(CurveGeometryKind::Offset),
+		9 => Some(CurveGeometryKind::Other),
+		_ => return Err(Error::TopologyQueryFailed),
+	})
 }
 
 fn decode_adjacency(offsets: &[u32], indices: &[u32], owner_count: usize, target_count: usize) -> Result<Vec<Vec<u32>>, Error> {

@@ -1128,10 +1128,23 @@ std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape)
 	return out;
 }
 
-TopologyData shape_topology(const TopoDS_Shape& shape) {
+TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
     TopologyData result;
     result.success = false;
     try {
+        constexpr uint32_t QUERY_FRAMES = 1U << 0;
+        constexpr uint32_t QUERY_MEASUREMENTS = 1U << 1;
+        constexpr uint32_t QUERY_GEOMETRY = 1U << 2;
+        constexpr uint32_t FACT_FRAME = 1U << 0;
+        constexpr uint32_t FACT_MEASUREMENT = 1U << 1;
+        constexpr uint32_t FACT_CLOSED = 1U << 2;
+        constexpr uint32_t FACT_DEGENERATE = 1U << 3;
+        constexpr uint32_t FACT_SEAM = 1U << 4;
+        constexpr uint32_t FACT_MANIFOLD = 1U << 5;
+        const bool query_frames = (query_flags & QUERY_FRAMES) != 0;
+        const bool query_measurements = (query_flags & QUERY_MEASUREMENTS) != 0;
+        const bool query_geometry = (query_flags & QUERY_GEOMETRY) != 0;
+
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
@@ -1141,12 +1154,16 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
 
         result.face_edge_offsets.reserve(static_cast<size_t>(faces.Extent()) + 1);
         result.edge_face_offsets.reserve(static_cast<size_t>(edges.Extent()) + 1);
+        result.edge_vertex_offsets.reserve(static_cast<size_t>(edges.Extent()) + 1);
         result.face_edge_offsets.push_back(0);
+        result.edge_vertex_offsets.push_back(0);
         std::vector<std::vector<uint32_t>> edge_faces(static_cast<size_t>(edges.Extent()));
 
         for (int face_index = 1; face_index <= faces.Extent(); ++face_index) {
             const TopoDS_Shape& face = faces(face_index);
             result.face_tshape_ids.push_back(reinterpret_cast<uint64_t>(face.TShape().get()));
+            result.face_location_hashes.push_back(static_cast<uint64_t>(face.Location().HashCode()));
+            result.face_orientations.push_back(static_cast<uint32_t>(face.Orientation()));
             NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> face_edges;
             TopExp::MapShapes(face, TopAbs_EDGE, face_edges);
             for (int local_index = 1; local_index <= face_edges.Extent(); ++local_index) {
@@ -1159,21 +1176,139 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
             }
             result.face_edge_offsets.push_back(
                 static_cast<uint32_t>(result.face_edge_indices.size()));
+
+            if (query_frames || query_measurements || query_geometry) {
+                uint32_t fact_flags = face.Closed() ? FACT_CLOSED : 0;
+                uint32_t geometry_kind = 0;
+                gp_Pnt point(0.0, 0.0, 0.0);
+                gp_Dir normal(0.0, 0.0, 1.0);
+                double area = 0.0;
+                const TopoDS_Face typed_face = TopoDS::Face(face);
+                BRepAdaptor_Surface surface(typed_face, true);
+                if (query_geometry) {
+                    geometry_kind = static_cast<uint32_t>(surface.GetType()) + 1;
+                }
+                if (query_frames) {
+                    const double u_first = surface.FirstUParameter();
+                    const double u_last = surface.LastUParameter();
+                    const double v_first = surface.FirstVParameter();
+                    const double v_last = surface.LastVParameter();
+                    if (std::isfinite(u_first) && std::isfinite(u_last)
+                        && std::isfinite(v_first) && std::isfinite(v_last)) {
+                        BRepLProp_SLProps properties(
+                            surface,
+                            (u_first + u_last) * 0.5,
+                            (v_first + v_last) * 0.5,
+                            1,
+                            Precision::Confusion());
+                        if (properties.IsNormalDefined()) {
+                            point = properties.Value();
+                            normal = properties.Normal();
+                            if (typed_face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                            fact_flags |= FACT_FRAME;
+                        }
+                    }
+                }
+                if (query_measurements) {
+                    GProp_GProps properties;
+                    BRepGProp::SurfaceProperties(typed_face, properties);
+                    area = properties.Mass();
+                    if (std::isfinite(area)) fact_flags |= FACT_MEASUREMENT;
+                }
+                result.face_geometry_kinds.push_back(geometry_kind);
+                result.face_fact_flags.push_back(fact_flags);
+                result.face_points.push_back(point.X());
+                result.face_points.push_back(point.Y());
+                result.face_points.push_back(point.Z());
+                result.face_normals.push_back(normal.X());
+                result.face_normals.push_back(normal.Y());
+                result.face_normals.push_back(normal.Z());
+                result.face_areas.push_back(area);
+            }
         }
 
         result.edge_face_offsets.push_back(0);
         for (int edge_index = 1; edge_index <= edges.Extent(); ++edge_index) {
             const TopoDS_Shape& edge = edges(edge_index);
             result.edge_tshape_ids.push_back(reinterpret_cast<uint64_t>(edge.TShape().get()));
+            result.edge_location_hashes.push_back(static_cast<uint64_t>(edge.Location().HashCode()));
+            result.edge_orientations.push_back(static_cast<uint32_t>(edge.Orientation()));
             const auto& adjacent = edge_faces[static_cast<size_t>(edge_index - 1)];
             for (uint32_t face_index : adjacent) result.edge_face_indices.push_back(face_index);
             result.edge_face_offsets.push_back(
                 static_cast<uint32_t>(result.edge_face_indices.size()));
+
+            const TopoDS_Edge typed_edge = TopoDS::Edge(edge);
+            NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edge_vertices;
+            TopExp::MapShapes(edge, TopAbs_VERTEX, edge_vertices);
+            for (int local_index = 1; local_index <= edge_vertices.Extent(); ++local_index) {
+                const int vertex_index = vertices.FindIndex(edge_vertices(local_index));
+                if (vertex_index < 1) return result;
+                result.edge_vertex_indices.push_back(static_cast<uint32_t>(vertex_index - 1));
+            }
+            result.edge_vertex_offsets.push_back(
+                static_cast<uint32_t>(result.edge_vertex_indices.size()));
+
+            if (query_frames || query_measurements || query_geometry) {
+                uint32_t fact_flags = 0;
+                if (BRep_Tool::IsClosed(edge)) fact_flags |= FACT_CLOSED;
+                if (BRep_Tool::Degenerated(typed_edge)) fact_flags |= FACT_DEGENERATE;
+                if (adjacent.size() == 2) fact_flags |= FACT_MANIFOLD;
+                for (uint32_t face_index : adjacent) {
+                    if (BRep_Tool::IsClosed(typed_edge, TopoDS::Face(faces(static_cast<int>(face_index + 1))))) {
+                        fact_flags |= FACT_SEAM;
+                        break;
+                    }
+                }
+                uint32_t geometry_kind = 0;
+                gp_Pnt point(0.0, 0.0, 0.0);
+                gp_Vec tangent(0.0, 0.0, 0.0);
+                double length = 0.0;
+                BRepAdaptor_Curve curve(typed_edge);
+                if (query_geometry) {
+                    geometry_kind = static_cast<uint32_t>(curve.GetType()) + 1;
+                }
+                if (query_frames) {
+                    const double first = curve.FirstParameter();
+                    const double last = curve.LastParameter();
+                    if (std::isfinite(first) && std::isfinite(last)) {
+                        curve.D1((first + last) * 0.5, point, tangent);
+                        if (tangent.SquareMagnitude() > Precision::SquareConfusion()) {
+                            tangent.Normalize();
+                            fact_flags |= FACT_FRAME;
+                        }
+                    }
+                }
+                if (query_measurements) {
+                    GProp_GProps properties;
+                    BRepGProp::LinearProperties(typed_edge, properties);
+                    length = properties.Mass();
+                    if (std::isfinite(length)) fact_flags |= FACT_MEASUREMENT;
+                }
+                result.edge_geometry_kinds.push_back(geometry_kind);
+                result.edge_fact_flags.push_back(fact_flags);
+                result.edge_points.push_back(point.X());
+                result.edge_points.push_back(point.Y());
+                result.edge_points.push_back(point.Z());
+                result.edge_tangents.push_back(tangent.X());
+                result.edge_tangents.push_back(tangent.Y());
+                result.edge_tangents.push_back(tangent.Z());
+                result.edge_lengths.push_back(length);
+            }
         }
         for (int vertex_index = 1; vertex_index <= vertices.Extent(); ++vertex_index) {
             const TopoDS_Shape& vertex = vertices(vertex_index);
             result.vertex_tshape_ids.push_back(
                 reinterpret_cast<uint64_t>(vertex.TShape().get()));
+            result.vertex_location_hashes.push_back(static_cast<uint64_t>(vertex.Location().HashCode()));
+            result.vertex_orientations.push_back(static_cast<uint32_t>(vertex.Orientation()));
+            if (query_frames) {
+                const gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(vertex));
+                result.vertex_fact_flags.push_back(FACT_FRAME);
+                result.vertex_points.push_back(point.X());
+                result.vertex_points.push_back(point.Y());
+                result.vertex_points.push_back(point.Z());
+            }
         }
         result.success = true;
     } catch (const Standard_Failure& failure) {

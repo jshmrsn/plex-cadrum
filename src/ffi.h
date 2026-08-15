@@ -225,7 +225,7 @@ MeshData mesh_shape_faces(
 // Callers typically cache the result in a Rust-side OnceLock<Vec<Edge>>.
 std::unique_ptr<std::vector<TopoDS_Edge>> shape_edges(const TopoDS_Shape& shape);
 std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape);
-TopologyData shape_topology(const TopoDS_Shape& shape);
+TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags);
 ValidationData shape_validation(const TopoDS_Shape& shape);
 rust::Vec<uint32_t> shared_face_indices(
     const TopoDS_Shape& first,
