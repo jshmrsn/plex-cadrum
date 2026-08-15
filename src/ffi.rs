@@ -35,6 +35,14 @@ mod ffi_bridge {
 		success: bool,
 	}
 
+	struct ValidationData {
+		invalid_faces: u32,
+		invalid_edges: u32,
+		invalid_vertices: u32,
+		valid: bool,
+		success: bool,
+	}
+
 	/// Operation-local topology correspondence returned by OCCT builders.
 	///
 	/// `relations` is encoded in chunks of six u32 values:
@@ -179,6 +187,7 @@ mod ffi_bridge {
 		fn shape_faces(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Face>>;
 		fn face_edges(face: &TopoDS_Face) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_topology(shape: &TopoDS_Shape) -> TopologyData;
+		fn shape_validation(shape: &TopoDS_Shape) -> ValidationData;
 		fn shared_face_indices(first: &TopoDS_Shape, second: &TopoDS_Shape) -> Vec<u32>;
 
 		fn clone_shape_handle(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;

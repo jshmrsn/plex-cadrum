@@ -167,3 +167,19 @@ fn surface_and_edge_presentation_can_be_requested_independently() {
 	assert_eq!(edges.len(), 12);
 	assert!(edges.iter().all(|edge| edge.points.len() >= 2));
 }
+
+#[test]
+fn exact_validation_accepts_primitive_blend_and_boolean_results() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let filleted = cube.fillet_edges(1.0, [cube.iter_edge().next().expect("edge")]).expect("fillet");
+	let tool = Solid::cylinder(2.0, DVec3::Z * 10.0).translate(DVec3::new(5.0, 5.0, 0.0));
+	let cut = (Boolean::from(&filleted) - Boolean::from(&tool)).build_vec().expect("cut");
+
+	for solid in std::iter::once(&cube).chain(std::iter::once(&filleted)).chain(cut.iter()) {
+		let report = solid.validate().expect("validate exact solid");
+		assert!(report.valid, "invalid report: {report:?}");
+		assert_eq!(report.invalid_faces, 0);
+		assert_eq!(report.invalid_edges, 0);
+		assert_eq!(report.invalid_vertices, 0);
+	}
+}

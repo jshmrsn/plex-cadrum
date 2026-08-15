@@ -47,6 +47,7 @@
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_ExtPF.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -1178,6 +1179,32 @@ TopologyData shape_topology(const TopoDS_Shape& shape) {
     } catch (const Standard_Failure& failure) {
         record_standard_failure(__func__, "native", 7, failure);
         return result;
+    }
+    return result;
+}
+
+ValidationData shape_validation(const TopoDS_Shape& shape) {
+    ValidationData result;
+    result.invalid_faces = 0;
+    result.invalid_edges = 0;
+    result.invalid_vertices = 0;
+    result.valid = false;
+    result.success = false;
+    try {
+        BRepCheck_Analyzer analyzer(shape, true);
+        result.valid = analyzer.IsValid();
+        for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            if (!analyzer.IsValid(ex.Current())) ++result.invalid_faces;
+        }
+        for (TopExp_Explorer ex(shape, TopAbs_EDGE); ex.More(); ex.Next()) {
+            if (!analyzer.IsValid(ex.Current())) ++result.invalid_edges;
+        }
+        for (TopExp_Explorer ex(shape, TopAbs_VERTEX); ex.More(); ex.Next()) {
+            if (!analyzer.IsValid(ex.Current())) ++result.invalid_vertices;
+        }
+        result.success = true;
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "validate_result", 4, failure);
     }
     return result;
 }

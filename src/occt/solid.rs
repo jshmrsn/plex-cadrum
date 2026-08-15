@@ -103,6 +103,21 @@ pub struct ExtrusionSession {
 	profile: Vec<Edge>,
 }
 
+pub struct FaceEditSession {
+	source: Solid,
+	face_index: u32,
+	boundary: Vec<Edge>,
+}
+
+/// Exact `BRepCheck_Analyzer` result for one solid occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidationReport {
+	pub valid: bool,
+	pub invalid_faces: u32,
+	pub invalid_edges: u32,
+	pub invalid_vertices: u32,
+}
+
 /// The dimension of an artifact-local topology entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TopologyKind {
@@ -359,6 +374,16 @@ impl Solid {
 		topology_snapshot_from_shape(&self.inner)
 	}
 
+	/// Run OCCT's exact B-rep analyzer and report invalid subshape counts.
+	pub fn validate(&self) -> Result<ValidationReport, Error> {
+		ffi::begin_operation();
+		let report = ffi::shape_validation(&self.inner);
+		if !report.success {
+			return Err(ffi::operation_error(Error::TopologyQueryFailed, "validate shape", "validate_result"));
+		}
+		Ok(ValidationReport { valid: report.valid, invalid_faces: report.invalid_faces, invalid_edges: report.invalid_edges, invalid_vertices: report.invalid_vertices })
+	}
+
 	/// Return process-local `(self, other)` face pairs with the same OCCT
 	/// occurrence (TShape and location); these are not persistent identifiers.
 	pub fn shared_face_indices(&self, other: &Self) -> Vec<(u32, u32)> {
@@ -430,6 +455,18 @@ impl Solid {
 		// updates then reuse both the live source shape and its cached edge handles.
 		source.iter_edge().count();
 		Ok(EdgeBlendSession { source, edge_indices: edge_indices.to_vec() })
+	}
+
+	pub fn prepare_face_edit(&self, face_index: u32) -> Result<FaceEditSession, Error> {
+		let face = self.iter_face().nth(face_index as usize).ok_or_else(|| Error::InvalidEdge("a face edit index is outside the source topology".into()))?;
+		let boundary = face.iter_edge().map(Edge::shared_copy).collect::<Vec<_>>();
+		if boundary.is_empty() {
+			return Err(Error::InvalidEdge("a face edit needs a bounded source face".into()));
+		}
+		let source = self.shared_copy();
+		source.iter_face().count();
+		source.iter_edge().count();
+		Ok(FaceEditSession { source, face_index, boundary })
 	}
 
 	/// Create an independent full copy with an ordinal source map. This creates
@@ -544,6 +581,24 @@ impl ExtrusionSession {
 	/// Rebuild the prepared profile with a new extrusion direction.
 	pub fn update(&self, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Solid, Error> {
 		Solid::extrude_cancelable(&self.profile, direction, progress)
+	}
+}
+
+impl FaceEditSession {
+	pub fn source(&self) -> &Solid {
+		&self.source
+	}
+
+	pub fn face(&self) -> Result<&Face, Error> {
+		self.source.iter_face().nth(self.face_index as usize).ok_or(Error::TopologyQueryFailed)
+	}
+
+	pub fn boundary(&self) -> &[Edge] {
+		&self.boundary
+	}
+
+	pub fn source_id(&self) -> u64 {
+		self.source.id()
 	}
 }
 

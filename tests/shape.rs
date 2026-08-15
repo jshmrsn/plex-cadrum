@@ -115,7 +115,6 @@ fn test_face_edge_incidence_via_id() {
 // ==================== iter_history (B fully inside A) ====================
 
 #[test]
-#[ignore = "CellsBuilder の history semantics 差異: tool 面の history threading は要 follow-up"]
 fn test_new_faces_subtract_b_inside_a() {
 	// small_box が big_box に完全に収まる → small の 6 面はすべて Modified されない
 	// 新実装（iter_history の post_id 集合）では unchanged 面も history に入る → tool faces = 6
@@ -128,7 +127,6 @@ fn test_new_faces_subtract_b_inside_a() {
 }
 
 #[test]
-#[ignore = "CellsBuilder の history semantics 差異: tool 面の history threading は要 follow-up"]
 fn test_new_faces_intersect_b_inside_a() {
 	// intersect(big, small) の結果は small そのもの
 	// small の 6 面はすべて unchanged → tool faces = 結果の全フェイス = 6

@@ -26,6 +26,7 @@ struct OperationDiagnosticData;
 // Forward-declare shared structs (defined by cxx in ffi.rs.h)
 struct MeshData;
 struct TopologyData;
+struct ValidationData;
 struct HistoryData;
 
 void clear_operation_diagnostic();
@@ -225,6 +226,7 @@ MeshData mesh_shape_faces(
 std::unique_ptr<std::vector<TopoDS_Edge>> shape_edges(const TopoDS_Shape& shape);
 std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape);
 TopologyData shape_topology(const TopoDS_Shape& shape);
+ValidationData shape_validation(const TopoDS_Shape& shape);
 rust::Vec<uint32_t> shared_face_indices(
     const TopoDS_Shape& first,
     const TopoDS_Shape& second);

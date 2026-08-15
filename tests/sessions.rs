@@ -44,3 +44,13 @@ fn prepared_sessions_reject_empty_or_invalid_topology() {
 	assert!(matches!(cube.prepare_edge_blend(&[u32::MAX]), Err(Error::InvalidEdge(_))));
 	assert!(matches!(ExtrusionSession::prepare(std::iter::empty()), Err(Error::InvalidEdge(_))));
 }
+
+#[test]
+fn prepared_face_edit_retains_source_face_and_boundary() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let session = cube.prepare_face_edit(0).expect("prepare face edit");
+	assert_eq!(session.source_id(), cube.id());
+	assert_eq!(session.face().expect("prepared face").id(), cube.iter_face().next().expect("source face").id());
+	assert_eq!(session.boundary().len(), 4);
+	assert!(matches!(cube.prepare_face_edit(u32::MAX), Err(Error::InvalidEdge(_))));
+}
