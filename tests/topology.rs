@@ -5,6 +5,7 @@ use cadrum::{Boolean, CurveGeometryKind, DVec3, ProfileOrient, Solid, SurfaceGeo
 #[test]
 fn cube_topology_snapshot_is_bidirectionally_consistent() {
 	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	assert_eq!(cube.vertex_count().expect("count cube vertices"), 8);
 	let topology = cube.topology_snapshot().expect("query cube topology");
 
 	assert_eq!(topology.face_ids().len(), 6);

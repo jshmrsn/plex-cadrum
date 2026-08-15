@@ -447,6 +447,16 @@ impl Solid {
 		&self.topology_history
 	}
 
+	/// Counts unique topological vertices without building adjacency or query facts.
+	pub fn vertex_count(&self) -> Result<usize, Error> {
+		ffi::begin_operation();
+		let count = ffi::shape_vertex_count(&self.inner);
+		if count == u32::MAX {
+			return Err(ffi::operation_error(Error::TopologyQueryFailed, "vertex count", "inspect_result"));
+		}
+		Ok(count as usize)
+	}
+
 	pub fn fillet_edges_cancelable<'a>(&self, radius: f64, edges: impl IntoIterator<Item = &'a Edge>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
 		if !radius.is_finite() || radius <= 0.0 {
 			return Err(Error::InvalidInput("fillet radius must be finite and positive".into()));

@@ -1412,6 +1412,17 @@ std::unique_ptr<std::vector<TopoDS_Face>> shape_faces(const TopoDS_Shape& shape)
 	return out;
 }
 
+uint32_t shape_vertex_count(const TopoDS_Shape& shape) {
+    try {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+        TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
+        return static_cast<uint32_t>(vertices.Extent());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return UINT32_MAX;
+    }
+}
+
 TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
     TopologyData result;
     result.success = false;

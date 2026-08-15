@@ -217,6 +217,7 @@ mod ffi_bridge {
 
 		fn shape_edges(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_faces(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Face>>;
+		fn shape_vertex_count(shape: &TopoDS_Shape) -> u32;
 		fn face_edges(face: &TopoDS_Face) -> UniquePtr<CxxVector<TopoDS_Edge>>;
 		fn shape_topology(shape: &TopoDS_Shape, query_flags: u32) -> TopologyData;
 		fn shape_validation(shape: &TopoDS_Shape) -> ValidationData;
