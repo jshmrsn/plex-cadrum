@@ -20,6 +20,7 @@ using TopoDS_Edge = ::TopoDS_Edge;
 // Forward-declare the Rust opaque types (defined by cxx in ffi.rs.h)
 struct RustReader;
 struct RustWriter;
+struct CancellationToken;
 
 // Forward-declare shared structs (defined by cxx in ffi.rs.h)
 struct MeshData;
@@ -87,8 +88,9 @@ std::unique_ptr<TopoDS_Shape> deep_copy(const TopoDS_Shape& shape);
 // 全 clause で同一 material を使い RemoveInternalBoundaries() で内部境界を除去。
 // `out_history` の形式は builder_boolean と同じ。
 std::unique_ptr<TopoDS_Shape> builder_cells(
-	const std::vector<TopoDS_Shape>& solids,
-	rust::Slice<const int64_t> clauses,
+    const std::vector<TopoDS_Shape>& solids,
+    rust::Slice<const int64_t> clauses,
+	const CancellationToken& progress,
 	rust::Vec<uint64_t>& out_history,
 	HistoryData& out_topology_history);
 
@@ -125,6 +127,7 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
     const TopoDS_Shape& solid,
 	const std::vector<TopoDS_Edge>& edges,
 	double radius,
+	const CancellationToken& progress,
 	rust::Vec<uint64_t>& out_history,
 	HistoryData& out_topology_history);
 
@@ -140,6 +143,7 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
     const TopoDS_Shape& solid,
 	const std::vector<TopoDS_Edge>& edges,
 	double distance,
+	const CancellationToken& progress,
 	rust::Vec<uint64_t>& out_history,
 	HistoryData& out_topology_history);
 

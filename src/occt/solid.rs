@@ -233,6 +233,56 @@ impl Solid {
 		&self.topology_history
 	}
 
+	pub fn fillet_edges_cancelable<'a>(&self, radius: f64, edges: impl IntoIterator<Item = &'a Edge>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		let mut edge_vec = ffi::edge_vec_new();
+		for edge in edges {
+			ffi::edge_vec_push(edge_vec.pin_mut(), &edge.inner);
+		}
+		let mut history = Vec::new();
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::builder_fillet(&self.inner, &edge_vec, radius, progress, &mut history, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::FilletFailed });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		#[cfg(feature = "color")]
+		let colormap = self.remap_colormap(&shape, &history);
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			colormap,
+			history,
+		)
+		.with_topology_history(topology_history))
+	}
+
+	pub fn chamfer_edges_cancelable<'a>(&self, distance: f64, edges: impl IntoIterator<Item = &'a Edge>, progress: &ffi::CancellationToken) -> Result<Self, Error> {
+		let mut edge_vec = ffi::edge_vec_new();
+		for edge in edges {
+			ffi::edge_vec_push(edge_vec.pin_mut(), &edge.inner);
+		}
+		let mut history = Vec::new();
+		let mut topology_history = empty_ffi_history();
+		let shape = ffi::builder_chamfer(&self.inner, &edge_vec, distance, progress, &mut history, &mut topology_history);
+		if shape.is_null() {
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::ChamferFailed });
+		}
+		let topology_history = decode_topology_history(topology_history)?;
+		#[cfg(feature = "color")]
+		let colormap = self.remap_colormap(&shape, &history);
+		Ok(Solid::new(
+			shape,
+			#[cfg(feature = "color")]
+			colormap,
+			history,
+		)
+		.with_topology_history(topology_history))
+	}
+
+	pub fn boolean_build_cancelable(b: &Boolean<Self>, progress: &ffi::CancellationToken) -> Result<Vec<Self>, Error> {
+		boolean_build_with_progress(b, progress)
+	}
+
 	// ==================== Internal accessors ====================
 
 	/// Borrow the underlying `TopoDS_Shape` (crate-internal only).
@@ -437,6 +487,60 @@ fn empty_ffi_history() -> ffi::HistoryData {
 	ffi::HistoryData { relations: Vec::new(), deleted: Vec::new(), unresolved: Vec::new(), success: false }
 }
 
+fn boolean_build_with_progress(b: &Boolean<Solid>, progress: &ffi::CancellationToken) -> Result<Vec<Solid>, Error> {
+	let (solids, clauses) = (b.solids(), b.clauses());
+	if solids.is_empty() || clauses.is_empty() {
+		return Err(Error::OneFailed(0));
+	}
+	debug_assert!(clauses.last() == Some(&0), "clauses must be 0-terminated");
+
+	let mut solid_vec = ffi::shape_vec_new();
+	for solid in solids {
+		ffi::shape_vec_push(solid_vec.pin_mut(), solid.inner());
+	}
+	let mut history = Vec::new();
+	let mut topology_history = empty_ffi_history();
+	let inner = ffi::builder_cells(&solid_vec, clauses, progress, &mut history, &mut topology_history);
+	if inner.is_null() {
+		return Err(if progress.is_cancelled() { Error::Cancelled } else { Error::BooleanOperationFailed });
+	}
+	let topology_history = decode_topology_history(topology_history)?;
+
+	#[cfg(feature = "color")]
+	let colormap = {
+		let mut map = std::collections::HashMap::new();
+		for pair in history.chunks_exact(2) {
+			for solid in solids {
+				if let Some(&color) = solid.colormap.get(&pair[1]) {
+					map.entry(pair[0]).or_insert(color);
+					break;
+				}
+			}
+		}
+		map
+	};
+
+	#[cfg(feature = "color")]
+	let solid_color = solids[0].colormap.get(&solids[0].id()).copied();
+	let compound = CompoundShape::from_raw(
+		inner,
+		#[cfg(feature = "color")]
+		colormap,
+		history,
+		topology_history,
+	);
+	#[cfg_attr(not(feature = "color"), allow(unused_mut))]
+	let mut output = compound.decompose();
+	#[cfg(feature = "color")]
+	if let Some(color) = solid_color {
+		for solid in &mut output {
+			let id = solid.id();
+			solid.colormap_mut().insert(id, color);
+		}
+	}
+	Ok(output)
+}
+
 impl SolidStruct for Solid {
 	type Edge = Edge;
 	type Face = Face;
@@ -586,49 +690,11 @@ impl SolidStruct for Solid {
 	// ==================== Fillet / Chamfer ====================
 
 	fn fillet_edges<'a>(&self, radius: f64, edges: impl IntoIterator<Item = &'a Edge>) -> Result<Self, Error> {
-		let mut edge_vec = ffi::edge_vec_new();
-		for e in edges {
-			ffi::edge_vec_push(edge_vec.pin_mut(), &e.inner);
-		}
-		let mut history: Vec<u64> = Default::default();
-		let mut topology_history = empty_ffi_history();
-		let shape = ffi::builder_fillet(&self.inner, &edge_vec, radius, &mut history, &mut topology_history);
-		if shape.is_null() {
-			return Err(Error::FilletFailed);
-		}
-		let topology_history = decode_topology_history(topology_history)?;
-		#[cfg(feature = "color")]
-		let colormap = self.remap_colormap(&shape, &history);
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			colormap,
-			history,
-		)
-		.with_topology_history(topology_history))
+		self.fillet_edges_cancelable(radius, edges, &ffi::CancellationToken::new())
 	}
 
 	fn chamfer_edges<'a>(&self, distance: f64, edges: impl IntoIterator<Item = &'a Edge>) -> Result<Self, Error> {
-		let mut edge_vec = ffi::edge_vec_new();
-		for e in edges {
-			ffi::edge_vec_push(edge_vec.pin_mut(), &e.inner);
-		}
-		let mut history: Vec<u64> = Default::default();
-		let mut topology_history = empty_ffi_history();
-		let shape = ffi::builder_chamfer(&self.inner, &edge_vec, distance, &mut history, &mut topology_history);
-		if shape.is_null() {
-			return Err(Error::ChamferFailed);
-		}
-		let topology_history = decode_topology_history(topology_history)?;
-		#[cfg(feature = "color")]
-		let colormap = self.remap_colormap(&shape, &history);
-		Ok(Solid::new(
-			shape,
-			#[cfg(feature = "color")]
-			colormap,
-			history,
-		)
-		.with_topology_history(topology_history))
+		self.chamfer_edges_cancelable(distance, edges, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Sweep ====================
@@ -826,62 +892,7 @@ impl SolidStruct for Solid {
 		Boolean::from_parts(solids, clauses.into_iter().collect())
 	}
 	fn boolean_build(b: &Boolean<Self>) -> Result<Vec<Self>, Error> {
-		// CellsBuilder ベースの一括評価。DIMACS-flat DNF (`clauses`) を C++ 側に渡す。
-		let (solids, clauses) = (b.solids(), b.clauses());
-		if solids.is_empty() || clauses.is_empty() {
-			return Err(Error::OneFailed(0));
-		}
-		debug_assert!(clauses.last() == Some(&0), "clauses must be 0-terminated");
-
-		let mut solid_vec = ffi::shape_vec_new();
-		for s in solids {
-			ffi::shape_vec_push(solid_vec.pin_mut(), s.inner());
-		}
-		let mut history: Vec<u64> = Default::default();
-		let mut topology_history = empty_ffi_history();
-		let inner = ffi::builder_cells(&solid_vec, clauses, &mut history, &mut topology_history);
-		if inner.is_null() {
-			return Err(Error::BooleanOperationFailed);
-		}
-		let topology_history = decode_topology_history(topology_history)?;
-
-		#[cfg(feature = "color")]
-		let colormap = {
-			let mut m = std::collections::HashMap::new();
-			for pair in history.chunks_exact(2) {
-				for s in solids {
-					if let Some(&c) = s.colormap.get(&pair[1]) {
-						m.entry(pair[0]).or_insert(c);
-						break;
-					}
-				}
-			}
-			m
-		};
-
-		// No history carries a solid colour — the result volume descends from no single
-		// operand. Take the left operand's, as Fusion 360 does.
-		#[cfg(feature = "color")]
-		let solid_color = solids[0].colormap.get(&solids[0].id()).copied();
-
-		let compound = CompoundShape::from_raw(
-			inner,
-			#[cfg(feature = "color")]
-			colormap,
-			history,
-			topology_history,
-		);
-		#[cfg_attr(not(feature = "color"), allow(unused_mut))]
-		let mut out = compound.decompose();
-		// Only now do the result solids exist, so only now can their ids be keyed.
-		#[cfg(feature = "color")]
-		if let Some(c) = solid_color {
-			for s in &mut out {
-				let id = s.id();
-				s.colormap_mut().insert(id, c);
-			}
-		}
-		Ok(out)
+		boolean_build_with_progress(b, &ffi::CancellationToken::new())
 	}
 
 	// --- I/O (delegates to super::io helpers) ---

@@ -7,6 +7,9 @@
 
 // --- Standard / exceptions ---
 #include <Standard_Failure.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressRange.hxx>
+#include <Message_ProgressScope.hxx>
 
 // --- Topology types & navigation ---
 #include <TopoDS.hxx>
@@ -99,7 +102,6 @@
 #ifndef FEATURE_COLOR
 #include <STEPControl_Reader.hxx>
 #include <STEPControl_Writer.hxx>
-#include <Message_ProgressRange.hxx>
 #endif
 #include <Message.hxx>
 
@@ -117,6 +119,24 @@
 #include <array>
 
 namespace cadrum {
+
+class RustProgressIndicator final : public Message_ProgressIndicator {
+public:
+    explicit RustProgressIndicator(const CancellationToken& progress)
+        : progress_(progress) {}
+
+protected:
+    bool UserBreak() override {
+        return rust_progress_cancelled(progress_);
+    }
+
+    void Show(const Message_ProgressScope&, const bool) override {
+        rust_progress_set(progress_, GetPosition());
+    }
+
+private:
+    const CancellationToken& progress_;
+};
 
 // OCCT defaults to a stdout printer that emits "Statistics on Transfer" banners on STEP read/write.
 // Clear all printers at load time per the documented recommendation.
@@ -590,11 +610,13 @@ static void finish_topology_history(const HistoryMaps& result_maps, HistoryData&
 std::unique_ptr<TopoDS_Shape> builder_cells(
     const std::vector<TopoDS_Shape>& solids,
     rust::Slice<const int64_t> clauses,
+    const CancellationToken& progress,
     rust::Vec<uint64_t>& out_history,
     HistoryData& out_topology_history)
 {
     try {
-        if (solids.empty() || clauses.size() == 0) return nullptr;
+        if (solids.empty() || clauses.size() == 0
+            || rust_progress_cancelled(progress)) return nullptr;
 
         // BOPAlgo_CellsBuilder は引数 N≥2 を想定するため、単一 solid の場合は
         // deep copy のみで返す (DNF clause が `[+1, 0]` の単純ケース)。
@@ -616,12 +638,14 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
         NCollection_List<TopoDS_Shape> args;
         for (const auto& s : solids) args.Append(s);
         cb.SetArguments(args);
-        cb.Perform();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        cb.Perform(indicator->Start());
         if (cb.HasErrors()) return nullptr;
 
         const int material = 1;
         NCollection_List<TopoDS_Shape> take, avoid;
         for (size_t i = 0; i < clauses.size(); ++i) {
+            if (rust_progress_cancelled(progress)) return nullptr;
             int64_t lit = clauses[i];
             if (lit == 0) {
                 if (!take.IsEmpty()) {
@@ -637,6 +661,7 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
             else         avoid.Append(solids[static_cast<size_t>(idx)]);
         }
         cb.RemoveInternalBoundaries();
+        if (rust_progress_cancelled(progress)) return nullptr;
 
         std::unordered_map<uint64_t, uint64_t> relay1, relay2;
         for (const auto& s : solids) {
@@ -1719,10 +1744,12 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Edge>& edges,
     double radius,
+    const CancellationToken& progress,
     rust::Vec<uint64_t>& out_history,
     HistoryData& out_topology_history)
 {
     try {
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (edges.empty()) {
             // No-op: shallow copy; every face is identity.
             std::unordered_map<uint64_t, uint64_t> relay;
@@ -1740,7 +1767,9 @@ std::unique_ptr<TopoDS_Shape> builder_fillet(
             if (e.IsNull()) continue;
             mk.Add(radius, e);
         }
-        mk.Build();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        mk.Build(indicator->Start());
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!mk.IsDone()) return nullptr;
         TopoDS_Shape result = mk.Shape();
         if (result.IsNull()) return nullptr;
@@ -1770,10 +1799,12 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
     const TopoDS_Shape& solid,
     const std::vector<TopoDS_Edge>& edges,
     double distance,
+    const CancellationToken& progress,
     rust::Vec<uint64_t>& out_history,
     HistoryData& out_topology_history)
 {
     try {
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (edges.empty()) {
             // No-op: shallow copy; every face is identity.
             std::unordered_map<uint64_t, uint64_t> relay;
@@ -1791,7 +1822,9 @@ std::unique_ptr<TopoDS_Shape> builder_chamfer(
             if (e.IsNull()) continue;
             mk.Add(distance, e);
         }
-        mk.Build();
+        Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
+        mk.Build(indicator->Start());
+        if (rust_progress_cancelled(progress)) return nullptr;
         if (!mk.IsDone()) return nullptr;
         TopoDS_Shape result = mk.Shape();
         if (result.IsNull()) return nullptr;

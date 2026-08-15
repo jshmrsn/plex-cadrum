@@ -5,5 +5,6 @@ pub mod face;
 // src/ffi.h / src/ffi.cpp, mounted here to stay crate-internal.
 #[path = "../ffi.rs"]
 mod ffi;
+pub use ffi::CancellationToken;
 pub mod io;
 pub mod solid;

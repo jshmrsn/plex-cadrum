@@ -1,4 +1,10 @@
-use std::io::{Read, Write};
+use std::{
+	io::{Read, Write},
+	sync::{
+		atomic::{AtomicBool, AtomicU64, Ordering},
+		Arc,
+	},
+};
 
 #[allow(clippy::too_many_arguments)]
 #[cxx::bridge(namespace = "cadrum")]
@@ -46,9 +52,12 @@ mod ffi_bridge {
 	extern "Rust" {
 		type RustReader;
 		type RustWriter;
+		type CancellationToken;
 
 		fn rust_reader_read(reader: &mut RustReader, buf: &mut [u8]) -> usize;
 		fn rust_writer_write(writer: &mut RustWriter, buf: &[u8]) -> usize;
+		fn rust_progress_cancelled(progress: &CancellationToken) -> bool;
+		fn rust_progress_set(progress: &CancellationToken, completed: f64);
 	}
 
 	unsafe extern "C++" {
@@ -103,7 +112,7 @@ mod ffi_bridge {
 		// Evaluate any boolean expression on N solids via BOPAlgo_CellsBuilder.
 		// `clauses` は DIMACS-flat DNF (`+i` = solids[i-1] を take、`-i` = avoid、`0` = clause 終端)。
 		// `out_history` の形式は builder_boolean と同じ。
-		fn builder_cells(solids: &CxxVector<TopoDS_Shape>, clauses: &[i64], out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_cells(solids: &CxxVector<TopoDS_Shape>, clauses: &[i64], progress: &CancellationToken, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// Unify shared faces. `out_history` receives flat [new_id, old_id, ...]
 		// pairs (same layout as `builder_boolean`), used by Solid::clean to populate
@@ -113,8 +122,8 @@ mod ffi_bridge {
 		// shell/fillet/chamfer fill `out_history` with flat [post_id, src_id]
 		// pairs (same layout as builder_cells) → Solid::history + colormap remap.
 		fn builder_thick_solid(solid: &TopoDS_Shape, open_faces: &CxxVector<TopoDS_Face>, thickness: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
-		fn builder_fillet(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, radius: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
-		fn builder_chamfer(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, distance: f64, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_fillet(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, radius: f64, progress: &CancellationToken, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_chamfer(solid: &TopoDS_Shape, edges: &CxxVector<TopoDS_Edge>, distance: f64, progress: &CancellationToken, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// ==================== Transforms (solid → solid, no history) ====================
 
@@ -213,6 +222,39 @@ mod ffi_bridge {
 
 // Re-export all bridge items so other modules can use `ffi::TopoDS_Shape` etc.
 pub use ffi_bridge::*;
+
+/// Thread-safe cooperative cancellation and progress shared with supported OCCT builders.
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+	cancelled: Arc<AtomicBool>,
+	progress_bits: Arc<AtomicU64>,
+}
+
+impl CancellationToken {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	pub fn cancel(&self) {
+		self.cancelled.store(true, Ordering::Release);
+	}
+
+	pub fn is_cancelled(&self) -> bool {
+		self.cancelled.load(Ordering::Acquire)
+	}
+
+	pub fn progress(&self) -> f64 {
+		f64::from_bits(self.progress_bits.load(Ordering::Acquire))
+	}
+}
+
+pub fn rust_progress_cancelled(progress: &CancellationToken) -> bool {
+	progress.is_cancelled()
+}
+
+pub fn rust_progress_set(progress: &CancellationToken, completed: f64) {
+	progress.progress_bits.store(completed.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+}
 
 // ==================== Stream wrappers ====================
 pub struct RustReader {

@@ -23,6 +23,9 @@ pub enum Error {
 	/// A batched topology query returned inconsistent data.
 	TopologyQueryFailed,
 
+	/// The caller cooperatively cancelled an OCCT operation.
+	Cancelled,
+
 	/// Boolean operation (fuse/cut/common) failed.
 	BooleanOperationFailed,
 
@@ -117,6 +120,7 @@ impl std::fmt::Display for Error {
 			Error::TriangulationFailed => write!(f, "Triangulation failed"),
 			Error::ProjectionFailed(entity) => write!(f, "{entity} projection failed"),
 			Error::TopologyQueryFailed => write!(f, "Topology query failed"),
+			Error::Cancelled => write!(f, "Operation cancelled"),
 			Error::BooleanOperationFailed => write!(f, "Boolean operation failed"),
 			Error::OneFailed(n) => write!(f, "Expected exactly one resulting Solid, got {}", n),
 			Error::CleanFailed => write!(f, "Shape clean failed"),
