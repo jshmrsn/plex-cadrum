@@ -204,6 +204,10 @@ impl TopologyHistory {
 		&self.unresolved
 	}
 
+	fn is_empty(&self) -> bool {
+		self.relations.is_empty() && self.deleted.is_empty() && self.unresolved.is_empty()
+	}
+
 	pub fn sources_for(&self, result: ResultTopology) -> impl Iterator<Item = &TopologyRelation> {
 		self.relations.iter().filter(move |relation| relation.result == result)
 	}
@@ -615,6 +619,23 @@ impl Solid {
 
 	pub fn boolean_build_cancelable(b: &Boolean<Self>, progress: &ffi::CancellationToken) -> Result<Vec<Self>, Error> {
 		boolean_build_with_progress(b, progress)
+	}
+
+	/// Builds a Boolean and merges adjacent result faces and edges that share an exact domain.
+	///
+	/// Use this for final user-facing Boolean bodies whose OCCT cell boundaries must not become
+	/// independent selectable topology. Construction workflows that intentionally retain adjacent
+	/// coplanar or coaxial sections should use [`Self::boolean_build_cancelable`] instead.
+	pub fn boolean_build_regularized_cancelable(b: &Boolean<Self>, progress: &ffi::CancellationToken) -> Result<Vec<Self>, Error> {
+		boolean_build_with_progress(b, progress)?
+			.into_iter()
+			.map(|solid| {
+				if progress.is_cancelled() {
+					return Err(Error::Cancelled);
+				}
+				Ok(solid.clean().unwrap_or(solid))
+			})
+			.collect()
 	}
 
 	pub fn extrude_cancelable<'a>(profile: impl IntoIterator<Item = &'a Edge>, direction: DVec3, progress: &ffi::CancellationToken) -> Result<Self, Error> {
@@ -1276,6 +1297,19 @@ fn boolean_build_with_progress(b: &Boolean<Solid>, progress: &ffi::CancellationT
 	Ok(output)
 }
 
+fn compose_face_history(source: &[u64], next: &[u64]) -> Vec<u64> {
+	let mut source_by_result = std::collections::HashMap::<u64, Vec<u64>>::new();
+	for pair in source.chunks_exact(2) {
+		source_by_result.entry(pair[0]).or_default().push(pair[1]);
+	}
+	next.chunks_exact(2)
+		.flat_map(|pair| {
+			let result = pair[0];
+			source_by_result.get(&pair[1]).into_iter().flatten().flat_map(move |source| [result, *source])
+		})
+		.collect()
+}
+
 impl SolidStruct for Solid {
 	type Edge = Edge;
 	type Face = Face;
@@ -1461,15 +1495,17 @@ impl SolidStruct for Solid {
 	// ==================== Clean ====================
 
 	fn clean(&self) -> Result<Self, Error> {
-		let mut history: Vec<u64> = Default::default();
-		let mut topology_history = empty_ffi_history();
-		let inner = ffi::builder_clean(&self.inner, &mut history, &mut topology_history);
+		let mut clean_history: Vec<u64> = Default::default();
+		let mut clean_topology_history = empty_ffi_history();
+		let inner = ffi::builder_clean(&self.inner, &mut clean_history, &mut clean_topology_history);
 		if inner.is_null() {
 			return Err(Error::CleanFailed);
 		}
-		let topology_history = decode_topology_history(topology_history)?;
+		let clean_topology_history = decode_topology_history(clean_topology_history)?;
 		#[cfg(feature = "color")]
-		let colormap = self.remap_colormap(&inner, &history);
+		let colormap = self.remap_colormap(&inner, &clean_history);
+		let history = if self.history.is_empty() { clean_history } else { compose_face_history(&self.history, &clean_history) };
+		let topology_history = if self.topology_history.is_empty() { clean_topology_history } else { self.topology_history.then(&clean_topology_history) };
 		Ok(Solid::new(
 			inner,
 			#[cfg(feature = "color")]

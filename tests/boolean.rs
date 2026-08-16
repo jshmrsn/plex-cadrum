@@ -4,7 +4,7 @@
 //! 式の正確な DNF 表現は内部実装詳細なので、ここでは「体積」と「結果 Solid 数」
 //! というブラックボックス的不変量で検証する。
 
-use cadrum::{Boolean, DVec3, Solid};
+use cadrum::{Boolean, CancellationToken, DVec3, Solid, SurfaceGeometryKind, TopologyQueryOptions};
 
 /// 原点に置いた cube を `(tx, ty, tz)` だけ平行移動して返す。
 fn cube(x: f64, y: f64, z: f64, tx: f64, ty: f64, tz: f64) -> Solid {
@@ -73,6 +73,25 @@ fn test_intersect_two_cubes() {
 	let b = cube(10.0, 10.0, 10.0, 5.0, 0.0, 0.0); // overlap 5×10×10 = 500
 	let s: Solid = [&a, &b].into_iter().map(Boolean::from).reduce(|x, y| x * y).unwrap().build().unwrap();
 	assert!((s.volume() - 500.0).abs() < 1e-3, "got {}", s.volume());
+}
+
+#[test]
+fn intersecting_box_preserves_one_contiguous_cylinder_wall() {
+	let cylinder = Solid::cylinder(10.0, DVec3::Z * 8.0);
+	let cylinder_face_ids = cylinder.iter_face().map(|face| face.id()).collect::<std::collections::HashSet<_>>();
+	let box_tool = Solid::cube(DVec3::new(-12.0, -6.0, 0.0), DVec3::new(12.0, 6.0, 8.0)).translate(DVec3::new(2.0, -4.0, 0.0));
+	let intersection = Solid::boolean_build_regularized_cancelable(&(&cylinder * &box_tool), &CancellationToken::new()).expect("intersect cylinder with box").into_iter().next().expect("intersection produces one solid");
+	let topology = intersection.topology_snapshot_with_options(TopologyQueryOptions::MEASUREMENT).expect("query intersection topology");
+	let surface_kinds = (0..topology.face_ids().len() as u32).map(|face| topology.face_facts(face).expect("face facts").geometry).collect::<Vec<_>>();
+	let cylinder_result_id = intersection.iter_face().zip(&surface_kinds).find_map(|(face, kind)| (*kind == Some(SurfaceGeometryKind::Cylinder)).then(|| face.id())).expect("result has a cylindrical face");
+
+	assert_eq!(surface_kinds.len(), 4, "surface kinds: {surface_kinds:?}");
+	assert_eq!(surface_kinds.iter().filter(|kind| **kind == Some(SurfaceGeometryKind::Cylinder)).count(), 1, "the surviving wall must remain one selectable analytic cylinder: {surface_kinds:?}");
+	assert_eq!(surface_kinds.iter().filter(|kind| **kind == Some(SurfaceGeometryKind::Plane)).count(), 3, "only the caps and box cut should be planar: {surface_kinds:?}");
+	assert_eq!(topology.edge_ids().len(), 6, "same-domain cleanup must remove internal split edges");
+	assert!(intersection.iter_history().any(|[result, source]| result == cylinder_result_id && cylinder_face_ids.contains(&source)), "cleanup must retain the cylinder wall's source identity");
+	let recleaned = intersection.clean().expect("re-clean intersection");
+	assert!(recleaned.iter_history().any(|[_, source]| cylinder_face_ids.contains(&source)), "re-cleaning an operation result must compose rather than replace its source history");
 }
 
 #[test]
