@@ -294,14 +294,16 @@ pub struct TopologyQueryOptions {
 	pub frames: bool,
 	pub measurements: bool,
 	pub geometry: bool,
+	pub edge_directions: bool,
 }
 
 impl TopologyQueryOptions {
-	pub const INTERACTION: Self = Self { frames: true, measurements: false, geometry: true };
-	pub const MEASUREMENT: Self = Self { frames: true, measurements: true, geometry: true };
+	pub const SEMANTIC_IDENTITY: Self = Self { frames: true, measurements: false, geometry: false, edge_directions: false };
+	pub const INTERACTION: Self = Self { frames: true, measurements: false, geometry: true, edge_directions: true };
+	pub const MEASUREMENT: Self = Self { frames: true, measurements: true, geometry: true, edge_directions: true };
 
 	fn bits(self) -> u32 {
-		u32::from(self.frames) | (u32::from(self.measurements) << 1) | (u32::from(self.geometry) << 2)
+		u32::from(self.frames) | (u32::from(self.measurements) << 1) | (u32::from(self.geometry) << 2) | (u32::from(self.edge_directions) << 3)
 	}
 }
 

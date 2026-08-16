@@ -66,6 +66,31 @@ fn topology_snapshot_batches_occurrences_adjacency_and_query_facts() {
 }
 
 #[test]
+fn semantic_identity_topology_omits_expensive_edge_directions() {
+	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
+	let topology = cube.topology_snapshot_with_options(TopologyQueryOptions::SEMANTIC_IDENTITY).expect("query semantic identity facts");
+
+	for face in 0..6 {
+		let facts = topology.face_facts(face).expect("face facts");
+		assert!(facts.representative_point.is_some());
+		assert!(facts.normal.is_some());
+		assert_eq!(facts.geometry, None);
+		assert_eq!(facts.area, None);
+	}
+	for edge in 0..12 {
+		let facts = topology.edge_facts(edge).expect("edge facts");
+		assert!(facts.midpoint.is_some());
+		assert!(facts.tangent.is_some());
+		assert_eq!(facts.outward_direction, None);
+		assert_eq!(facts.geometry, None);
+		assert_eq!(facts.length, None);
+	}
+	for vertex in 0..8 {
+		assert!(topology.vertex_facts(vertex).expect("vertex facts").point.is_some());
+	}
+}
+
+#[test]
 fn topology_distance_returns_exact_witness_points_without_meshing() {
 	let first = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	let second = Solid::cube(DVec3::new(15.0, 0.0, 0.0), DVec3::new(25.0, 10.0, 10.0));

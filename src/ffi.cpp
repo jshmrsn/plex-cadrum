@@ -1479,6 +1479,7 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
         constexpr uint32_t QUERY_FRAMES = 1U << 0;
         constexpr uint32_t QUERY_MEASUREMENTS = 1U << 1;
         constexpr uint32_t QUERY_GEOMETRY = 1U << 2;
+        constexpr uint32_t QUERY_EDGE_DIRECTIONS = 1U << 3;
         constexpr uint32_t FACT_FRAME = 1U << 0;
         constexpr uint32_t FACT_MEASUREMENT = 1U << 1;
         constexpr uint32_t FACT_CLOSED = 1U << 2;
@@ -1489,6 +1490,7 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
         const bool query_frames = (query_flags & QUERY_FRAMES) != 0;
         const bool query_measurements = (query_flags & QUERY_MEASUREMENTS) != 0;
         const bool query_geometry = (query_flags & QUERY_GEOMETRY) != 0;
+        const bool query_edge_directions = (query_flags & QUERY_EDGE_DIRECTIONS) != 0;
 
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
@@ -1624,7 +1626,7 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                             fact_flags |= FACT_FRAME;
                         }
                     }
-                    if ((fact_flags & FACT_FRAME) != 0) {
+                    if (query_edge_directions && (fact_flags & FACT_FRAME) != 0) {
                         for (uint32_t face_index : adjacent) {
                             try {
                                 const TopoDS_Face face = TopoDS::Face(
