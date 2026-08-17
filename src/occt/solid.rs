@@ -697,7 +697,7 @@ impl Solid {
 		.with_topology_history(topology_history))
 	}
 
-	pub fn loft_cancelable<'a, I: IntoIterator<Item = &'a Edge>, S: IntoIterator<Item = I>>(sections: S, ruled: bool, progress: &ffi::CancellationToken) -> Result<Self, Error>
+	pub fn loft_cancelable<'a, I: IntoIterator<Item = &'a Edge>, S: IntoIterator<Item = I>>(sections: S, ruled: bool, closed: bool, progress: &ffi::CancellationToken) -> Result<Self, Error>
 	where
 		Edge: 'a,
 	{
@@ -726,9 +726,9 @@ impl Solid {
 
 		let mut topology_history = empty_ffi_history();
 		ffi::begin_operation();
-		let shape = ffi::make_loft(&all_edges, ruled, progress, &mut topology_history);
+		let shape = ffi::make_loft(&all_edges, ruled, closed, progress, &mut topology_history);
 		if shape.is_null() {
-			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::LoftFailed(format!("loft: OCCT BRepOffsetAPI_ThruSections failed (sections={section_count}, ruled={ruled}). Check that each section forms a valid closed wire and sections are not coplanar.")), "loft", "occt_build") });
+			return Err(if progress.is_cancelled() { Error::Cancelled } else { ffi::operation_error(Error::LoftFailed(format!("loft: OCCT BRepOffsetAPI_ThruSections failed (sections={section_count}, ruled={ruled}, closed={closed}). Check that each section forms a valid closed wire and sections are not coplanar.")), "loft", "occt_build") });
 		}
 		let topology_history = decode_topology_history(topology_history)?;
 		Ok(Solid::new(
@@ -1410,7 +1410,7 @@ impl SolidStruct for Solid {
 	where
 		Edge: 'a,
 	{
-		Self::loft_cancelable(sections, ruled, &ffi::CancellationToken::new())
+		Self::loft_cancelable(sections, ruled, false, &ffi::CancellationToken::new())
 	}
 
 	// ==================== Sew ====================

@@ -219,3 +219,36 @@ fn test_loft_07_ruled_matches_piecewise_estimate() {
 	assert!((0.85..1.15).contains(&ratio), "smooth/ruled volume ratio {:.4} out of sanity band", ratio);
 	println!("ruled = {:.6}, smooth = {:.6}, estimate = {:.6}", actual, mesh_volume(&smooth), expected);
 }
+
+// ==================== (8) closed=true: 周期 loft (トーラス近似) ====================
+
+#[test]
+fn test_loft_08_closed_ring_drops_caps_and_matches_torus_volume() {
+	let ring_radius = 10.0;
+	let tube_radius = 2.0;
+	let count = 8;
+	let sections: Vec<Vec<Edge>> = (0..count)
+		.map(|i| {
+			let angle = std::f64::consts::TAU * i as f64 / count as f64;
+			let tangent = DVec3::new(-angle.sin(), angle.cos(), 0.0);
+			let center = DVec3::new(ring_radius * angle.cos(), ring_radius * angle.sin(), 0.0);
+			vec![Edge::circle(tube_radius, tangent).unwrap().translate(center)]
+		})
+		.collect();
+
+	let open = Solid::loft(&sections, false).expect("open loft should succeed");
+	let closed = Solid::loft_cancelable(&sections, false, true, &cadrum::CancellationToken::new()).expect("closed loft should succeed");
+
+	// Pappus: V = 2πR·πr²。8 断面の周期補間なので 2% 以内で一致するはず。
+	let expected = 2.0 * PI * PI * ring_radius * tube_radius * tube_radius;
+	let actual = closed.volume();
+	let rel_err = (actual - expected).abs() / expected;
+	assert!(rel_err < 0.02, "closed loft volume {:.4} vs torus {:.4} (relative error {:.4})", actual, expected, rel_err);
+
+	// closed は端面 cap を持たないので open より face 数が少ない。
+	let open_faces = open.iter_face().count();
+	let closed_faces = closed.iter_face().count();
+	assert!(closed_faces < open_faces, "closed loft faces {} should drop the {} open-loft caps", closed_faces, open_faces);
+
+	write_outputs(std::slice::from_ref(&closed), "test_loft_08_closed_ring");
+}

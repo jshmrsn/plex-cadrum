@@ -265,7 +265,7 @@ mod ffi_bridge {
 
 		fn make_extrude(profile_edges: &CxxVector<TopoDS_Edge>, dx: f64, dy: f64, dz: f64, progress: &CancellationToken, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 		fn make_pipe_shell(all_edges: &CxxVector<TopoDS_Edge>, spine_edges: &CxxVector<TopoDS_Edge>, orient: u32, ux: f64, uy: f64, uz: f64, aux_spine_edges: &CxxVector<TopoDS_Edge>, progress: &CancellationToken, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
-		fn make_loft(all_edges: &CxxVector<TopoDS_Edge>, ruled: bool, progress: &CancellationToken, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn make_loft(all_edges: &CxxVector<TopoDS_Edge>, ruled: bool, closed: bool, progress: &CancellationToken, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 		fn make_sewn_solid(faces: &CxxVector<TopoDS_Face>, tolerance: f64) -> UniquePtr<TopoDS_Shape>;
 		fn make_offset_shape(shape: &TopoDS_Shape, offset: f64, tolerance: f64) -> UniquePtr<TopoDS_Shape>;
 		fn make_bspline_solid(coords: &[f64], nu: u32, nv: u32, u_periodic: bool) -> UniquePtr<TopoDS_Shape>;

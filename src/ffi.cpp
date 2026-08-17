@@ -2744,6 +2744,7 @@ std::unique_ptr<TopoDS_Shape> make_pipe_shell(
 std::unique_ptr<TopoDS_Shape> make_loft(
     const std::vector<TopoDS_Edge>& all_edges,
     bool ruled,
+    bool closed,
     const CancellationToken& progress,
     HistoryData& out_topology_history)
 {
@@ -2783,6 +2784,12 @@ std::unique_ptr<TopoDS_Shape> make_loft(
         if (!flush_wire()) return nullptr;
 
         if (wire_count < 2) return nullptr;
+
+        if (closed) {
+            // The same TopoDS_Wire object (not a copy) makes ThruSections'
+            // IsSame() check select its official v-periodic closed path.
+            loft.AddWire(TopoDS::Wire(section_wires.front()));
+        }
 
         Handle(RustProgressIndicator) indicator = new RustProgressIndicator(progress);
         loft.Build(indicator->Start());

@@ -620,6 +620,9 @@ pub trait SolidStruct: Sized + Transform {
 	/// spline vs straight lines).
 	///
 	/// Internally uses `BRepOffsetAPI_ThruSections(isSolid=true, isRuled=ruled)`.
+	/// The inherent `Solid::loft_cancelable` additionally accepts `closed=true`,
+	/// which re-adds the first section wire after the last one so ThruSections
+	/// builds a v-periodic solid ring with no end caps.
 	fn loft<'a, I: IntoIterator<Item = &'a Self::Edge>, S: IntoIterator<Item = I>>(sections: S, ruled: bool) -> Result<Self, Error>
 	where
 		Self::Edge: 'a;

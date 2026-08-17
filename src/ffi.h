@@ -400,9 +400,12 @@ void shape_vec_push(std::vector<TopoDS_Shape>& v, const TopoDS_Shape& s);
 // Sections in `all_edges` are separated by null-edge sentinels.
 // `ruled=false` interpolates a smooth B-spline surface through all sections;
 // `ruled=true` connects adjacent sections with straight ruled panels.
+// `closed=true` re-adds the first wire object after the last section so
+// ThruSections detects IsSame() and builds a v-periodic capless solid.
 std::unique_ptr<TopoDS_Shape> make_loft(
     const std::vector<TopoDS_Edge>& all_edges,
     bool ruled,
+    bool closed,
 	const CancellationToken& progress,
 	HistoryData& out_topology_history);
 

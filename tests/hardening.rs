@@ -66,7 +66,7 @@ fn loft_honors_cancellation_and_a_later_build_still_succeeds() {
 	let upper = lower.iter().map(|edge| edge.shared_copy().translate(DVec3::Z * 5.0)).collect::<Vec<_>>();
 	let cancellation = CancellationToken::new();
 	cancellation.cancel();
-	assert!(matches!(Solid::loft_cancelable([lower.iter(), upper.iter()], false, &cancellation), Err(Error::Cancelled)));
-	let completed = Solid::loft_cancelable([lower.iter(), upper.iter()], false, &CancellationToken::new()).expect("later loft");
+	assert!(matches!(Solid::loft_cancelable([lower.iter(), upper.iter()], false, false, &cancellation), Err(Error::Cancelled)));
+	let completed = Solid::loft_cancelable([lower.iter(), upper.iter()], false, false, &CancellationToken::new()).expect("later loft");
 	assert!(completed.validate().expect("validate loft").valid);
 }
