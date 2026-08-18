@@ -26,6 +26,8 @@
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Trsf.hxx>
 #include <Geom_CylindricalSurface.hxx>
@@ -46,10 +48,11 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepExtrema_ExtPF.hxx>
+#include <BRepFeat_SplitShape.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -57,6 +60,8 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepProj_Projection.hxx>
+#include <BRepAlgo_NormalProjection.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 
@@ -1267,6 +1272,93 @@ void shape_plane_section(const TopoDS_Shape& shape,
                 local[local.size() - 1] - local[1]);
             if (gap < 1.0e-6) {
                 // Drop the duplicated closing point; closure is reported separately.
+                local.pop_back();
+                local.pop_back();
+                count -= 1;
+                closed = true;
+            }
+            if (count < 2) {
+                continue;
+            }
+            for (double coordinate : local) {
+                out_section.points.push_back(coordinate);
+            }
+            out_section.wire_sizes.push_back(static_cast<uint32_t>(count));
+            out_section.wire_closed.push_back(closed ? 1 : 0);
+        }
+        out_section.success = true;
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        out_section.success = false;
+    }
+}
+
+void shape_face_boundary_projection(const TopoDS_Shape& shape,
+    uint32_t face_index,
+    double ox, double oy, double oz,
+    double nx, double ny, double nz,
+    double xx, double xy, double xz,
+    double deflection,
+    PlaneSectionData& out_section) {
+    out_section.success = false;
+    try {
+        gp_Pnt origin(ox, oy, oz);
+        gp_Dir normal(nx, ny, nz);
+        gp_Dir x_axis(xx, xy, xz);
+        gp_Dir y_axis = normal.Crossed(x_axis);
+
+        TopoDS_Face face;
+        uint32_t index = 0;
+        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More();
+             explorer.Next(), ++index) {
+            if (index == face_index) {
+                face = TopoDS::Face(explorer.Current());
+                break;
+            }
+        }
+        if (face.IsNull()) {
+            return;
+        }
+
+        for (TopExp_Explorer wire_iter(face, TopAbs_WIRE); wire_iter.More();
+             wire_iter.Next()) {
+            TopoDS_Wire wire = TopoDS::Wire(wire_iter.Current());
+            std::vector<double> local;
+            gp_Pnt previous;
+            bool has_previous = false;
+            for (BRepTools_WireExplorer wire_explorer(wire, face); wire_explorer.More();
+                 wire_explorer.Next()) {
+                const TopoDS_Edge& edge = wire_explorer.Current();
+                BRepAdaptor_Curve curve(edge);
+                GCPnts_QuasiUniformDeflection sampler(curve, deflection);
+                if (!sampler.IsDone() || sampler.NbPoints() < 2) {
+                    continue;
+                }
+                bool reversed = edge.Orientation() == TopAbs_REVERSED;
+                for (int sample = 1; sample <= sampler.NbPoints(); ++sample) {
+                    int ordered = reversed ? sampler.NbPoints() + 1 - sample : sample;
+                    gp_Pnt point = sampler.Value(ordered);
+                    if (has_previous && point.Distance(previous) < 1.0e-9) {
+                        continue;
+                    }
+                    // Parallel projection along the plane normal: only the in-plane
+                    // coordinates are kept.
+                    gp_Vec relative(origin, point);
+                    local.push_back(relative.Dot(gp_Vec(x_axis)));
+                    local.push_back(relative.Dot(gp_Vec(y_axis)));
+                    previous = point;
+                    has_previous = true;
+                }
+            }
+            std::size_t count = local.size() / 2;
+            if (count < 2) {
+                continue;
+            }
+            bool closed = false;
+            double gap = std::hypot(
+                local[local.size() - 2] - local[0],
+                local[local.size() - 1] - local[1]);
+            if (gap < 1.0e-6) {
                 local.pop_back();
                 local.pop_back();
                 count -= 1;
@@ -3556,7 +3648,7 @@ bool write_step_color_stream(
         return false;
     }
 }
-
 } // namespace cadrum
 
 #endif // FEATURE_COLOR
+

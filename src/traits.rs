@@ -511,6 +511,17 @@ pub trait SolidStruct: Sized + Transform {
 		x_axis: DVec3,
 		deflection: f64,
 	) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
+	/// Samples one face's boundary wires (by 0-based face index within this
+	/// solid) and projects them onto the plane frame along its normal,
+	/// returning 2D points per wire together with each wire's closure.
+	fn face_boundary_projection(
+		&self,
+		face_index: u32,
+		origin: DVec3,
+		normal: DVec3,
+		x_axis: DVec3,
+		deflection: f64,
+	) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
 	/// Volume of the solid (uniform density).
 	fn volume(&self) -> f64;
 	/// Total surface area of the solid.

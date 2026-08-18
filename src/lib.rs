@@ -181,6 +181,18 @@ impl Solid {
 	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
 		<Self as crate::traits::SolidStruct>::plane_section(self, origin, normal, x_axis, deflection)
 	}
+	pub fn face_boundary_projection(
+		&self,
+		face_index: u32,
+		origin: DVec3,
+		normal: DVec3,
+		x_axis: DVec3,
+		deflection: f64,
+	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		<Self as crate::traits::SolidStruct>::face_boundary_projection(
+			self, face_index, origin, normal, x_axis, deflection,
+		)
+	}
 	pub fn volume(&self) -> f64 {
 		<Self as crate::traits::SolidStruct>::volume(self)
 	}

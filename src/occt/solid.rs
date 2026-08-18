@@ -448,7 +448,6 @@ impl Solid {
 			topology_history: TopologyHistory::default(),
 		}
 	}
-
 	pub(crate) fn with_topology_history(mut self, topology_history: TopologyHistory) -> Self {
 		self.topology_history = topology_history;
 		self
@@ -1516,13 +1515,12 @@ impl SolidStruct for Solid {
 	}
 
 	// ==================== Boolean primitive ====================
-
 	fn boolean<'a>(solids: impl IntoIterator<Item = &'a Self>, clauses: impl IntoIterator<Item = i64>) -> Boolean<Self>
 	where
 		Self: 'a,
 	{
 		// TShape* を共有する shallow copy で Boolean を組む。Solid::clone() (=
-		// BRepBuilderAPI_Copy) と違い、各 face の id() が元と一致するため
+		// BRepBuilderAPI_Copy) と違い, 各 face の id() が元と一致するため
 		// boolean 結果の history (post_id, src_id) を呼び出し側の face id と
 		// 照合できる。
 		let solids: Vec<Solid> = solids
@@ -1607,6 +1605,58 @@ impl SolidStruct for Solid {
 			return Err(ffi::operation_error(
 				Error::InvalidInput("plane section failed".into()),
 				"plane_section",
+				"occt_build",
+			));
+		}
+		let mut wires = Vec::with_capacity(out.wire_sizes.len());
+		let mut cursor = 0usize;
+		for (size, closed) in out.wire_sizes.iter().zip(out.wire_closed.iter()) {
+			let count = *size as usize;
+			let points = (0..count)
+				.map(|index| {
+					let base = (cursor + index) * 2;
+					DVec2::new(out.points[base], out.points[base + 1])
+				})
+				.collect();
+			cursor += count;
+			wires.push((points, *closed != 0));
+		}
+		Ok(wires)
+	}
+
+	fn face_boundary_projection(
+		&self,
+		face_index: u32,
+		origin: DVec3,
+		normal: DVec3,
+		x_axis: DVec3,
+		deflection: f64,
+	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		let mut out = ffi::PlaneSectionData {
+			points: Vec::new(),
+			wire_sizes: Vec::new(),
+			wire_closed: Vec::new(),
+			success: false,
+		};
+		ffi::shape_face_boundary_projection(
+			&self.inner,
+			face_index,
+			origin.x,
+			origin.y,
+			origin.z,
+			normal.x,
+			normal.y,
+			normal.z,
+			x_axis.x,
+			x_axis.y,
+			x_axis.z,
+			deflection,
+			&mut out,
+		);
+		if !out.success {
+			return Err(ffi::operation_error(
+				Error::InvalidInput("face boundary projection failed".into()),
+				"face_boundary_projection",
 				"occt_build",
 			));
 		}

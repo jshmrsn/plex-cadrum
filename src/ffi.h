@@ -207,6 +207,17 @@ void shape_plane_section(const TopoDS_Shape& shape,
     double xx, double xy, double xz,
     double deflection,
     PlaneSectionData& out_section);
+// Samples the boundary wires of one face (by global face index) and projects
+// the points onto the plane frame: origin (ox,oy,oz), X (xx,xy,xz), normal
+// (nx,ny,nz); the frame's Y axis is normal x X.
+void shape_face_boundary_projection(const TopoDS_Shape& shape,
+    uint32_t face_index,
+    double ox, double oy, double oz,
+    double nx, double ny, double nz,
+    double xx, double xy, double xz,
+    double deflection,
+    PlaneSectionData& out_section);
+
 void shape_bounding_box(const TopoDS_Shape& shape,
     double& xmin, double& ymin, double& zmin,
     double& xmax, double& ymax, double& zmax);
