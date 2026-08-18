@@ -16,6 +16,7 @@
 #include <TopoDS_Compound.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <NCollection_IndexedMap.hxx>
@@ -61,6 +62,8 @@
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepProj_Projection.hxx>
+#include <BOPAlgo_Splitter.hxx>
+#include <gp_Elips.hxx>
 #include <BRepAlgo_NormalProjection.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
@@ -553,6 +556,133 @@ std::unique_ptr<std::vector<TopoDS_Shape>> decompose_into_solids(const TopoDS_Sh
 void compound_add(TopoDS_Shape& compound, const TopoDS_Shape& child) {
     BRep_Builder builder;
     builder.Add(compound, child);
+}
+
+std::unique_ptr<TopoDS_Shape> build_compound() {
+    auto compound = std::make_unique<TopoDS_Compound>();
+    BRep_Builder builder;
+    builder.MakeCompound(*compound);
+    return std::unique_ptr<TopoDS_Shape>(std::move(compound));
+}
+
+void compound_add_edge(TopoDS_Shape& compound, const TopoDS_Edge& child) {
+    BRep_Builder builder;
+    builder.Add(compound, child);
+}
+
+std::unique_ptr<TopoDS_Shape> split_solid_with_projected_edges(const TopoDS_Shape& solid,
+    const TopoDS_Shape& tool_edges, double dx, double dy, double dz)
+{
+    try {
+        gp_Dir direction(dx, dy, dz);
+
+        // Project every tool edge onto the solid's surfaces along the given
+        // direction. BRepProj_Projection yields one wire per hit region; a
+        // single edge can land on several faces (e.g. front and back of the
+        // solid), and the splitter wants all of them.
+        TopoDS_Compound projected;
+        BRep_Builder builder;
+        builder.MakeCompound(projected);
+        bool any_projected = false;
+        for (TopExp_Explorer ex(tool_edges, TopAbs_EDGE); ex.More(); ex.Next()) {
+            BRepProj_Projection projector(TopoDS::Edge(ex.Current()), solid, direction);
+            for (; projector.More(); projector.Next()) {
+                const TopoDS_Wire& wire = projector.Current();
+                if (!wire.IsNull()) {
+                    builder.Add(projected, wire);
+                    any_projected = true;
+                }
+            }
+        }
+        if (!any_projected) return nullptr;
+
+        BOPAlgo_Splitter splitter;
+        splitter.AddArgument(solid);
+        splitter.AddTool(projected);
+        splitter.Perform();
+        if (splitter.HasErrors()) return nullptr;
+        const TopoDS_Shape& result = splitter.Shape();
+        if (result.IsNull()) return nullptr;
+
+        // Deep-copy so the result shares no geometry handles with the
+        // operator object or inputs (same rule as the boolean builders).
+        BRepBuilderAPI_Copy copier(result);
+        if (!copier.IsDone()) return nullptr;
+        return std::make_unique<TopoDS_Shape>(copier.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
+}
+
+std::unique_ptr<TopoDS_Shape> project_shape_to_plane(const TopoDS_Shape& shape,
+    double ox, double oy, double oz, double nx, double ny, double nz)
+{
+    try {
+        gp_Pln plane(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz));
+        // An unbounded plane face makes the projector emit edges with
+        // infinite parameters ("BRep_Builder::Infinite parameter"), so bound
+        // the face generously around the shape's own extent.
+        Bnd_Box bounds;
+        BRepBndLib::Add(shape, bounds);
+        if (bounds.IsVoid()) return nullptr;
+        gp_Pnt bounds_min = bounds.CornerMin();
+        gp_Pnt bounds_max = bounds.CornerMax();
+        double reach = bounds_min.Distance(bounds_max)
+            + gp_Pnt(ox, oy, oz).Distance(gp_Pnt(
+                (bounds_min.X() + bounds_max.X()) * 0.5,
+                (bounds_min.Y() + bounds_max.Y()) * 0.5,
+                (bounds_min.Z() + bounds_max.Z()) * 0.5))
+            + 1.0;
+        BRepBuilderAPI_MakeFace make_face(plane, -reach, reach, -reach, reach);
+        if (!make_face.IsDone()) return nullptr;
+        // BRepProj_Projection only accepts a wire or edge as the projected
+        // shape, so feed it the shape's edges one at a time. Duplicate edges
+        // (each shared by two faces) collapse via the IndexedMap.
+        TopTools_IndexedMapOfShape unique_edges;
+        TopExp::MapShapes(shape, TopAbs_EDGE, unique_edges);
+        TopoDS_Compound projected;
+        BRep_Builder builder;
+        builder.MakeCompound(projected);
+        bool any_projected = false;
+        for (Standard_Integer index = 1; index <= unique_edges.Extent(); ++index) {
+            BRepProj_Projection projector(TopoDS::Edge(unique_edges(index)), make_face.Face(), gp_Dir(nx, ny, nz));
+            for (; projector.More(); projector.Next()) {
+                const TopoDS_Wire& wire = projector.Current();
+                if (!wire.IsNull()) {
+                    builder.Add(projected, wire);
+                    any_projected = true;
+                }
+            }
+        }
+        if (!any_projected) return nullptr;
+        // Deep-copy: the projection result shares geometry handles with the
+        // operator objects (same rule as the boolean builders).
+        BRepBuilderAPI_Copy copier(projected);
+        if (!copier.IsDone()) return nullptr;
+        return std::make_unique<TopoDS_Shape>(copier.Shape());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
+}
+
+std::unique_ptr<TopoDS_Edge> edge_ellipse(double major_radius, double minor_radius,
+    double xx, double xy, double xz, double nx, double ny, double nz)
+{
+    try {
+        if (minor_radius < Precision::Confusion() || major_radius < minor_radius) return nullptr;
+        gp_Dir normal(nx, ny, nz);
+        gp_Dir major_dir(xx, xy, xz);
+        gp_Ax2 ax2(gp_Pnt(0.0, 0.0, 0.0), normal, major_dir);
+        gp_Elips ellipse(ax2, major_radius, minor_radius);
+        BRepBuilderAPI_MakeEdge edgeMaker(ellipse);
+        if (!edgeMaker.IsDone()) return nullptr;
+        return std::make_unique<TopoDS_Edge>(edgeMaker.Edge());
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        return nullptr;
+    }
 }
 
 // ==================== Builders (solid → solid with history) ====================

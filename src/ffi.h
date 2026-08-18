@@ -226,6 +226,22 @@ void shape_bounding_box(const TopoDS_Shape& shape,
 
 std::unique_ptr<std::vector<TopoDS_Shape>> decompose_into_solids(const TopoDS_Shape& shape);
 void compound_add(TopoDS_Shape& compound, const TopoDS_Shape& child);
+std::unique_ptr<TopoDS_Shape> build_compound();
+void compound_add_edge(TopoDS_Shape& compound, const TopoDS_Edge& child);
+// Projects each tool edge onto the solid's faces along (dx,dy,dz) with
+// BRepProj_Projection, then splits the solid's faces with the projected
+// on-surface edges via BOPAlgo_Splitter. Null when nothing projects or
+// splitting fails.
+// Projects the shape's edges onto the given plane along its normal.
+// Null when the projection fails outright.
+std::unique_ptr<TopoDS_Shape> project_shape_to_plane(const TopoDS_Shape& shape,
+    double ox, double oy, double oz, double nx, double ny, double nz);
+std::unique_ptr<TopoDS_Shape> split_solid_with_projected_edges(const TopoDS_Shape& solid,
+    const TopoDS_Shape& tool_edges, double dx, double dy, double dz);
+// One exact elliptical edge centred at the origin: major axis along
+// (xx,xy,xz), normal (nx,ny,nz).
+std::unique_ptr<TopoDS_Edge> edge_ellipse(double major_radius, double minor_radius,
+    double xx, double xy, double xz, double nx, double ny, double nz);
 
 // ==================== Meshing ====================
 

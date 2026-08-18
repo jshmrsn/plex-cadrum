@@ -138,6 +138,15 @@ impl EdgeStruct for Edge {
 		Edge::try_from_ffi(inner, format!("circle: invalid params (radius={radius}, axis={axis:?})")).map_err(|fallback| ffi::operation_error(fallback, "build circle", "occt_build"))
 	}
 
+	fn ellipse(major_radius: f64, minor_radius: f64, major_axis: DVec3, normal: DVec3) -> Result<Self, Error> {
+		if !major_radius.is_finite() || !minor_radius.is_finite() || minor_radius <= 0.0 || major_radius < minor_radius || !major_axis.is_finite() || major_axis == DVec3::ZERO || !normal.is_finite() || normal == DVec3::ZERO {
+			return Err(Error::InvalidEdge("ellipse radii must be finite with major >= minor > 0 and its axes must be finite and nonzero".into()));
+		}
+		ffi::begin_operation();
+		let inner = ffi::edge_ellipse(major_radius, minor_radius, major_axis.x, major_axis.y, major_axis.z, normal.x, normal.y, normal.z);
+		Edge::try_from_ffi(inner, format!("ellipse: invalid params (major={major_radius}, minor={minor_radius}, major_axis={major_axis:?}, normal={normal:?})")).map_err(|fallback| ffi::operation_error(fallback, "build ellipse", "occt_build"))
+	}
+
 	fn line(a: DVec3, b: DVec3) -> Result<Self, Error> {
 		if !a.is_finite() || !b.is_finite() || a.distance_squared(b) <= f64::EPSILON {
 			return Err(Error::InvalidEdge("line endpoints must be finite and distinct".into()));

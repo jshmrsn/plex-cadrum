@@ -88,6 +88,9 @@ impl Edge {
 	pub fn circle(radius: f64, axis: DVec3) -> Result<crate::Edge, Error> {
 		<Self as crate::traits::EdgeStruct>::circle(radius, axis)
 	}
+	pub fn ellipse(major_radius: f64, minor_radius: f64, major_axis: DVec3, normal: DVec3) -> Result<crate::Edge, Error> {
+		<Self as crate::traits::EdgeStruct>::ellipse(major_radius, minor_radius, major_axis, normal)
+	}
 	pub fn line(a: DVec3, b: DVec3) -> Result<crate::Edge, Error> {
 		<Self as crate::traits::EdgeStruct>::line(a, b)
 	}
@@ -172,26 +175,17 @@ impl Solid {
 	pub fn iter_history(&self) -> impl Iterator<Item = [u64; 2]> + '_ {
 		<Self as crate::traits::SolidStruct>::iter_history(self)
 	}
-	pub fn plane_section(
-		&self,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+	pub fn plane_section(&self, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
 		<Self as crate::traits::SolidStruct>::plane_section(self, origin, normal, x_axis, deflection)
 	}
-	pub fn face_boundary_projection(
-		&self,
-		face_index: u32,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
-		<Self as crate::traits::SolidStruct>::face_boundary_projection(
-			self, face_index, origin, normal, x_axis, deflection,
-		)
+	pub fn face_boundary_projection(&self, face_index: u32, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		<Self as crate::traits::SolidStruct>::face_boundary_projection(self, face_index, origin, normal, x_axis, deflection)
+	}
+	pub fn project_to_plane(&self, origin: DVec3, normal: DVec3) -> Result<Vec<Edge>, Error> {
+		<Self as crate::traits::SolidStruct>::project_to_plane(self, origin, normal)
+	}
+	pub fn split_with_projected_edges(&self, tool_edges: &[Edge], direction: DVec3) -> Result<Vec<crate::Solid>, Error> {
+		<Self as crate::traits::SolidStruct>::split_with_projected_edges(self, tool_edges, direction)
 	}
 	pub fn volume(&self) -> f64 {
 		<Self as crate::traits::SolidStruct>::volume(self)

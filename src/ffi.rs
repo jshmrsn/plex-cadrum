@@ -223,6 +223,11 @@ mod ffi_bridge {
 
 		fn decompose_into_solids(shape: &TopoDS_Shape) -> UniquePtr<CxxVector<TopoDS_Shape>>;
 		fn compound_add(compound: Pin<&mut TopoDS_Shape>, child: &TopoDS_Shape);
+		fn build_compound() -> UniquePtr<TopoDS_Shape>;
+		fn compound_add_edge(compound: Pin<&mut TopoDS_Shape>, child: &TopoDS_Edge);
+		fn project_shape_to_plane(shape: &TopoDS_Shape, ox: f64, oy: f64, oz: f64, nx: f64, ny: f64, nz: f64) -> UniquePtr<TopoDS_Shape>;
+		fn split_solid_with_projected_edges(solid: &TopoDS_Shape, tool_edges: &TopoDS_Shape, dx: f64, dy: f64, dz: f64) -> UniquePtr<TopoDS_Shape>;
+		fn edge_ellipse(major_radius: f64, minor_radius: f64, xx: f64, xy: f64, xz: f64, nx: f64, ny: f64, nz: f64) -> UniquePtr<TopoDS_Edge>;
 
 		// ==================== Meshing ====================
 

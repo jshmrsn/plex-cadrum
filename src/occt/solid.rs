@@ -1574,39 +1574,11 @@ impl SolidStruct for Solid {
 
 	// ==================== Queries ====================
 
-	fn plane_section(
-		&self,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
-		let mut out = ffi::PlaneSectionData {
-			points: Vec::new(),
-			wire_sizes: Vec::new(),
-			wire_closed: Vec::new(),
-			success: false,
-		};
-		ffi::shape_plane_section(
-			&self.inner,
-			origin.x,
-			origin.y,
-			origin.z,
-			normal.x,
-			normal.y,
-			normal.z,
-			x_axis.x,
-			x_axis.y,
-			x_axis.z,
-			deflection,
-			&mut out,
-		);
+	fn plane_section(&self, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		let mut out = ffi::PlaneSectionData { points: Vec::new(), wire_sizes: Vec::new(), wire_closed: Vec::new(), success: false };
+		ffi::shape_plane_section(&self.inner, origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, x_axis.x, x_axis.y, x_axis.z, deflection, &mut out);
 		if !out.success {
-			return Err(ffi::operation_error(
-				Error::InvalidInput("plane section failed".into()),
-				"plane_section",
-				"occt_build",
-			));
+			return Err(ffi::operation_error(Error::InvalidInput("plane section failed".into()), "plane_section", "occt_build"));
 		}
 		let mut wires = Vec::with_capacity(out.wire_sizes.len());
 		let mut cursor = 0usize;
@@ -1624,41 +1596,64 @@ impl SolidStruct for Solid {
 		Ok(wires)
 	}
 
-	fn face_boundary_projection(
-		&self,
-		face_index: u32,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
-		let mut out = ffi::PlaneSectionData {
-			points: Vec::new(),
-			wire_sizes: Vec::new(),
-			wire_closed: Vec::new(),
-			success: false,
-		};
-		ffi::shape_face_boundary_projection(
-			&self.inner,
-			face_index,
-			origin.x,
-			origin.y,
-			origin.z,
-			normal.x,
-			normal.y,
-			normal.z,
-			x_axis.x,
-			x_axis.y,
-			x_axis.z,
-			deflection,
-			&mut out,
-		);
+	fn project_to_plane(&self, origin: DVec3, normal: DVec3) -> Result<Vec<Edge>, Error> {
+		if !origin.is_finite() || !normal.is_finite() || normal == DVec3::ZERO {
+			return Err(Error::InvalidInput("projection plane must have a finite origin and a finite nonzero normal".into()));
+		}
+		ffi::begin_operation();
+		let projected = ffi::project_shape_to_plane(&self.inner, origin.x, origin.y, origin.z, normal.x, normal.y, normal.z);
+		if projected.is_null() {
+			return Err(ffi::operation_error(Error::ProjectionFailed("solid"), "project_to_plane", "occt_build"));
+		}
+		let edges = ffi::shape_edges(&projected);
+		let mut result = Vec::with_capacity(edges.len());
+		for edge in edges.iter() {
+			result.push(Edge::try_from_ffi(ffi::clone_edge_handle(edge), "projected edge".into())?);
+		}
+		Ok(result)
+	}
+
+	fn split_with_projected_edges(&self, tool_edges: &[Edge], direction: DVec3) -> Result<Vec<Self>, Error> {
+		if !direction.is_finite() || direction == DVec3::ZERO {
+			return Err(Error::InvalidInput("projection direction must be finite and nonzero".into()));
+		}
+		if tool_edges.is_empty() {
+			return Err(Error::InvalidInput("split requires at least one tool edge".into()));
+		}
+		let mut compound = ffi::build_compound();
+		for edge in tool_edges {
+			ffi::compound_add_edge(compound.pin_mut(), &edge.inner);
+		}
+		ffi::begin_operation();
+		let split = ffi::split_solid_with_projected_edges(&self.inner, &compound, direction.x, direction.y, direction.z);
+		if split.is_null() {
+			return Err(ffi::operation_error(Error::ProjectionFailed("split tool"), "split_with_projected_edges", "occt_build"));
+		}
+		// No clean() here: the whole point is coplanar sibling faces, which
+		// ShapeUpgrade_UnifySameDomain would merge straight back together.
+		let solids = ffi::decompose_into_solids(&split);
+		let result: Vec<Self> = solids
+			.iter()
+			.map(|shape| {
+				Self::new(
+					ffi::clone_shape_handle(shape),
+					#[cfg(feature = "color")]
+					self.colormap.clone(),
+					Vec::new(),
+				)
+			})
+			.collect();
+		if result.is_empty() {
+			return Err(ffi::operation_error(Error::ProjectionFailed("split result"), "split_with_projected_edges", "occt_build"));
+		}
+		Ok(result)
+	}
+
+	fn face_boundary_projection(&self, face_index: u32, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		let mut out = ffi::PlaneSectionData { points: Vec::new(), wire_sizes: Vec::new(), wire_closed: Vec::new(), success: false };
+		ffi::shape_face_boundary_projection(&self.inner, face_index, origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, x_axis.x, x_axis.y, x_axis.z, deflection, &mut out);
 		if !out.success {
-			return Err(ffi::operation_error(
-				Error::InvalidInput("face boundary projection failed".into()),
-				"face_boundary_projection",
-				"occt_build",
-			));
+			return Err(ffi::operation_error(Error::InvalidInput("face boundary projection failed".into()), "face_boundary_projection", "occt_build"));
 		}
 		let mut wires = Vec::with_capacity(out.wire_sizes.len());
 		let mut cursor = 0usize;

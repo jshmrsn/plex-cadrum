@@ -373,6 +373,12 @@ pub trait EdgeStruct: Sized + Transform {
 	/// edge into place rather than relying on the implicit choice.
 	fn circle(radius: f64, axis: DVec3) -> Result<Self, Error>;
 
+	/// Full ellipse centred at the origin with the major axis along
+	/// `major_axis` and the ellipse plane's normal along `normal`.
+	/// `major_radius` must be >= `minor_radius` > 0; translate/rotate the
+	/// resulting edge into place.
+	fn ellipse(major_radius: f64, minor_radius: f64, major_axis: DVec3, normal: DVec3) -> Result<Self, Error>;
+
 	/// Straight line segment from `a` to `b`. Fails with `InvalidEdge` if
 	/// `a == b` (zero-length segment).
 	fn line(a: DVec3, b: DVec3) -> Result<Self, Error>;
@@ -504,24 +510,20 @@ pub trait SolidStruct: Sized + Transform {
 	/// Y axis is normal x X). Each wire reports whether it closes on itself.
 	/// `deflection` bounds the sampling's chordal deviation from the exact
 	/// section curves.
-	fn plane_section(
-		&self,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
+	fn plane_section(&self, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
+	/// Projects every edge of the solid onto the given plane along its
+	/// normal, returning the projected wireframe as exact plane curves.
+	fn project_to_plane(&self, origin: DVec3, normal: DVec3) -> Result<Vec<Self::Edge>, Error>;
+	/// Projects the tool edges onto this solid's surfaces along `direction`
+	/// (both projection senses), then splits the solid's faces with the
+	/// on-surface projected curves. The solid's material is unchanged; only
+	/// its face decomposition is refined. Fails when no tool edge projects
+	/// onto the solid or the split itself fails.
+	fn split_with_projected_edges(&self, tool_edges: &[Self::Edge], direction: DVec3) -> Result<Vec<Self>, Error>;
 	/// Samples one face's boundary wires (by 0-based face index within this
 	/// solid) and projects them onto the plane frame along its normal,
 	/// returning 2D points per wire together with each wire's closure.
-	fn face_boundary_projection(
-		&self,
-		face_index: u32,
-		origin: DVec3,
-		normal: DVec3,
-		x_axis: DVec3,
-		deflection: f64,
-	) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
+	fn face_boundary_projection(&self, face_index: u32, origin: DVec3, normal: DVec3, x_axis: DVec3, deflection: f64) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
 	/// Volume of the solid (uniform density).
 	fn volume(&self) -> f64;
 	/// Total surface area of the solid.
