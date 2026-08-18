@@ -62,6 +62,12 @@
 
 // --- Boolean operations & shape cleanup ---
 #include <BOPAlgo_CellsBuilder.hxx>
+#include <BRepAlgoAPI_Section.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <GCPnts_QuasiUniformDeflection.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <BRepTools_History.hxx>
 
@@ -1186,6 +1192,100 @@ bool shape_is_null(const TopoDS_Shape& shape) {
 
 bool shape_is_solid(const TopoDS_Shape& shape) {
     return !shape.IsNull() && shape.ShapeType() == TopAbs_SOLID;
+}
+
+void shape_plane_section(const TopoDS_Shape& shape,
+    double ox, double oy, double oz,
+    double nx, double ny, double nz,
+    double xx, double xy, double xz,
+    double deflection,
+    PlaneSectionData& out_section) {
+    out_section.success = false;
+    try {
+        gp_Pnt origin(ox, oy, oz);
+        gp_Dir normal(nx, ny, nz);
+        gp_Dir x_axis(xx, xy, xz);
+        gp_Dir y_axis = normal.Crossed(x_axis);
+        gp_Pln plane(origin, normal);
+
+        BRepAlgoAPI_Section section(shape, plane, false);
+        section.Approximation(true);
+        section.Build();
+        if (!section.IsDone()) {
+            return;
+        }
+
+        Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
+        for (TopExp_Explorer explorer(section.Shape(), TopAbs_EDGE); explorer.More();
+             explorer.Next()) {
+            edges->Append(explorer.Current());
+        }
+        if (edges->Length() == 0) {
+            out_section.success = true;  // an empty section is a valid result
+            return;
+        }
+        Handle(TopTools_HSequenceOfShape) wires;
+        ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, 1.0e-6, false, wires);
+        if (wires.IsNull()) {
+            return;
+        }
+
+        for (int index = 1; index <= wires->Length(); ++index) {
+            TopoDS_Wire wire = TopoDS::Wire(wires->Value(index));
+            std::vector<double> local;
+            gp_Pnt previous;
+            bool has_previous = false;
+            for (BRepTools_WireExplorer wire_explorer(wire); wire_explorer.More();
+                 wire_explorer.Next()) {
+                const TopoDS_Edge& edge = wire_explorer.Current();
+                BRepAdaptor_Curve curve(edge);
+                GCPnts_QuasiUniformDeflection sampler(curve, deflection);
+                if (!sampler.IsDone() || sampler.NbPoints() < 2) {
+                    continue;
+                }
+                bool reversed = edge.Orientation() == TopAbs_REVERSED;
+                for (int sample = 1; sample <= sampler.NbPoints(); ++sample) {
+                    int ordered = reversed ? sampler.NbPoints() + 1 - sample : sample;
+                    gp_Pnt point = sampler.Value(ordered);
+                    if (has_previous && point.Distance(previous) < 1.0e-9) {
+                        continue;
+                    }
+                    gp_Vec relative(origin, point);
+                    local.push_back(relative.Dot(gp_Vec(x_axis)));
+                    local.push_back(relative.Dot(gp_Vec(y_axis)));
+                    previous = point;
+                    has_previous = true;
+                }
+            }
+            std::size_t count = local.size() / 2;
+            if (count < 2) {
+                continue;
+            }
+            bool closed = false;
+            double gap = std::hypot(
+                local[local.size() - 2] - local[0],
+                local[local.size() - 1] - local[1]);
+            if (gap < 1.0e-6) {
+                // Drop the duplicated closing point; closure is reported separately.
+                local.pop_back();
+                local.pop_back();
+                count -= 1;
+                closed = true;
+            }
+            if (count < 2) {
+                continue;
+            }
+            for (double coordinate : local) {
+                out_section.points.push_back(coordinate);
+            }
+            out_section.wire_sizes.push_back(static_cast<uint32_t>(count));
+            out_section.wire_closed.push_back(closed ? 1 : 0);
+        }
+        out_section.success = true;
+    } catch (const Standard_Failure& failure) {
+        record_standard_failure(__func__, "native", 7, failure);
+        out_section.success = false;
+    }
 }
 
 double shape_volume(const TopoDS_Shape& shape) {

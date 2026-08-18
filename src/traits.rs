@@ -106,7 +106,7 @@ use crate::common::boolean::Boolean;
 use crate::common::color::Color;
 use crate::common::error::Error;
 use crate::common::mesh::Mesh;
-use glam::{DMat3, DQuat, DVec3};
+use glam::{DMat3, DQuat, DVec2, DVec3};
 
 /// Tessellation parameters for `Solid::mesh` and `Edge::approximation_segments`.
 ///
@@ -499,6 +499,18 @@ pub trait SolidStruct: Sized + Transform {
 	fn iter_history(&self) -> impl Iterator<Item = [u64; 2]> + '_;
 
 	// --- Queries ---
+	/// Intersects the solid with a plane, returning sampled section wires as
+	/// 2D points in the plane frame (origin, x axis, and normal; the frame's
+	/// Y axis is normal x X). Each wire reports whether it closes on itself.
+	/// `deflection` bounds the sampling's chordal deviation from the exact
+	/// section curves.
+	fn plane_section(
+		&self,
+		origin: DVec3,
+		normal: DVec3,
+		x_axis: DVec3,
+		deflection: f64,
+	) -> Result<Vec<(Vec<DVec2>, bool)>, Error>;
 	/// Volume of the solid (uniform density).
 	fn volume(&self) -> f64;
 	/// Total surface area of the solid.

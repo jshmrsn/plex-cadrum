@@ -29,6 +29,7 @@ struct TopologyData;
 struct ValidationData;
 struct HistoryData;
 struct TopologyDistanceData;
+struct PlaneSectionData;
 
 void clear_operation_diagnostic();
 OperationDiagnosticData take_operation_diagnostic();
@@ -197,6 +198,15 @@ void shape_inertia_tensor(const TopoDS_Shape& shape,
     double& m10, double& m11, double& m12,
     double& m20, double& m21, double& m22);
 bool shape_contains_point(const TopoDS_Shape& shape, double x, double y, double z);
+// Intersects the shape with the plane through (ox,oy,oz) with normal
+// (nx,ny,nz), returning sampled section wires as 2D points in the plane
+// frame whose X axis is (xx,xy,xz) and whose Y axis is normal x X.
+void shape_plane_section(const TopoDS_Shape& shape,
+    double ox, double oy, double oz,
+    double nx, double ny, double nz,
+    double xx, double xy, double xz,
+    double deflection,
+    PlaneSectionData& out_section);
 void shape_bounding_box(const TopoDS_Shape& shape,
     double& xmin, double& ymin, double& zmin,
     double& xmax, double& ymax, double& zmax);

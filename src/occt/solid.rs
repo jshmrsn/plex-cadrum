@@ -5,7 +5,7 @@ use super::ffi;
 use crate::common::boolean::Boolean;
 use crate::common::error::Error;
 use crate::traits::{ProfileOrient, SolidStruct, Transform};
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use std::sync::{Mutex, OnceLock};
 
 // OCCT の BRepOffsetAPI_ThruSections は内部で global state (おそらく
@@ -1575,6 +1575,56 @@ impl SolidStruct for Solid {
 	}
 
 	// ==================== Queries ====================
+
+	fn plane_section(
+		&self,
+		origin: DVec3,
+		normal: DVec3,
+		x_axis: DVec3,
+		deflection: f64,
+	) -> Result<Vec<(Vec<DVec2>, bool)>, Error> {
+		let mut out = ffi::PlaneSectionData {
+			points: Vec::new(),
+			wire_sizes: Vec::new(),
+			wire_closed: Vec::new(),
+			success: false,
+		};
+		ffi::shape_plane_section(
+			&self.inner,
+			origin.x,
+			origin.y,
+			origin.z,
+			normal.x,
+			normal.y,
+			normal.z,
+			x_axis.x,
+			x_axis.y,
+			x_axis.z,
+			deflection,
+			&mut out,
+		);
+		if !out.success {
+			return Err(ffi::operation_error(
+				Error::InvalidInput("plane section failed".into()),
+				"plane_section",
+				"occt_build",
+			));
+		}
+		let mut wires = Vec::with_capacity(out.wire_sizes.len());
+		let mut cursor = 0usize;
+		for (size, closed) in out.wire_sizes.iter().zip(out.wire_closed.iter()) {
+			let count = *size as usize;
+			let points = (0..count)
+				.map(|index| {
+					let base = (cursor + index) * 2;
+					DVec2::new(out.points[base], out.points[base + 1])
+				})
+				.collect();
+			cursor += count;
+			wires.push((points, *closed != 0));
+		}
+		Ok(wires)
+	}
 
 	fn volume(&self) -> f64 {
 		ffi::shape_volume(&self.inner)

@@ -86,6 +86,17 @@ mod ffi_bridge {
 	/// 0=unchanged, 1=modified, 2=generated. `deleted` is encoded as
 	/// `[operand, source_kind, source_index]`, and `unresolved` as
 	/// `[result_kind, result_index]`.
+	/// Planar section polylines in the section plane's own 2D frame.
+	struct PlaneSectionData {
+		/// Flat XY coordinates, wire after wire.
+		points: Vec<f64>,
+		/// Point count of each wire, indexing into `points` pairs.
+		wire_sizes: Vec<u32>,
+		/// 1 for a closed wire, 0 for an open one; parallel to `wire_sizes`.
+		wire_closed: Vec<u8>,
+		success: bool,
+	}
+
 	struct HistoryData {
 		relations: Vec<u32>,
 		deleted: Vec<u32>,
@@ -205,6 +216,7 @@ mod ffi_bridge {
 		fn shape_inertia_tensor(shape: &TopoDS_Shape, m00: &mut f64, m01: &mut f64, m02: &mut f64, m10: &mut f64, m11: &mut f64, m12: &mut f64, m20: &mut f64, m21: &mut f64, m22: &mut f64);
 		fn shape_contains_point(shape: &TopoDS_Shape, x: f64, y: f64, z: f64) -> bool;
 		fn shape_bounding_box(shape: &TopoDS_Shape, xmin: &mut f64, ymin: &mut f64, zmin: &mut f64, xmax: &mut f64, ymax: &mut f64, zmax: &mut f64);
+		fn shape_plane_section(shape: &TopoDS_Shape, ox: f64, oy: f64, oz: f64, nx: f64, ny: f64, nz: f64, xx: f64, xy: f64, xz: f64, deflection: f64, out_section: &mut PlaneSectionData);
 
 		// ==================== Compound Decompose/Compose ====================
 
