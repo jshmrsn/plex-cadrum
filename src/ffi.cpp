@@ -1880,8 +1880,16 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                 double area = 0.0;
                 const TopoDS_Face typed_face = TopoDS::Face(face);
                 BRepAdaptor_Surface surface(typed_face, true);
+                const GeomAbs_SurfaceType surface_type = surface.GetType();
                 if (query_geometry) {
-                    geometry_kind = static_cast<uint32_t>(surface.GetType()) + 1;
+                    geometry_kind = static_cast<uint32_t>(surface_type) + 1;
+                }
+                GProp_GProps surface_properties;
+                const bool has_surface_properties = query_measurements
+                    || (query_frames && query_geometry && surface_type == GeomAbs_Plane);
+                if (has_surface_properties) {
+                    BRepGProp::SurfaceProperties(typed_face, surface_properties);
+                    area = surface_properties.Mass();
                 }
                 if (query_frames) {
                     const double u_first = surface.FirstUParameter();
@@ -1900,14 +1908,18 @@ TopologyData shape_topology(const TopoDS_Shape& shape, uint32_t query_flags) {
                             point = properties.Value();
                             normal = properties.Normal();
                             if (typed_face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                            if (surface_type == GeomAbs_Plane && has_surface_properties) {
+                                const gp_Pnt center = surface_properties.CentreOfMass();
+                                if (std::isfinite(center.X()) && std::isfinite(center.Y())
+                                    && std::isfinite(center.Z())) {
+                                    point = center;
+                                }
+                            }
                             fact_flags |= FACT_FRAME;
                         }
                     }
                 }
                 if (query_measurements) {
-                    GProp_GProps properties;
-                    BRepGProp::SurfaceProperties(typed_face, properties);
-                    area = properties.Mass();
                     if (std::isfinite(area)) fact_flags |= FACT_MEASUREMENT;
                 }
                 result.face_geometry_kinds.push_back(geometry_kind);

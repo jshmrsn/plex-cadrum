@@ -66,6 +66,24 @@ fn topology_snapshot_batches_occurrences_adjacency_and_query_facts() {
 }
 
 #[test]
+fn planar_face_frames_use_the_bounded_faces_area_center() {
+	let profile = cadrum::Edge::polygon(&[DVec3::ZERO, DVec3::X * 6.0, DVec3::Y * 3.0]).expect("triangle profile");
+	let prism = Solid::extrude(&profile, DVec3::Z * 4.0).expect("triangle prism");
+	let topology = prism.topology_snapshot_with_options(TopologyQueryOptions::INTERACTION).expect("query prism interaction facts");
+	let top = (0..topology.face_ids().len() as u32)
+		.find_map(|face| {
+			let facts = topology.face_facts(face)?;
+			facts.normal.is_some_and(|normal| normal[2] > 0.999).then_some(facts)
+		})
+		.expect("top triangular face");
+
+	let center = top.representative_point.expect("top face center");
+	assert!((center[0] - 2.0).abs() < 1.0e-8, "center={center:?}");
+	assert!((center[1] - 1.0).abs() < 1.0e-8, "center={center:?}");
+	assert!((center[2] - 4.0).abs() < 1.0e-8, "center={center:?}");
+}
+
+#[test]
 fn semantic_identity_topology_omits_expensive_edge_directions() {
 	let cube = Solid::cube(DVec3::ZERO, DVec3::splat(10.0));
 	let topology = cube.topology_snapshot_with_options(TopologyQueryOptions::SEMANTIC_IDENTITY).expect("query semantic identity facts");
