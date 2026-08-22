@@ -189,6 +189,7 @@ mod ffi_bridge {
 		// pairs (same layout as `builder_boolean`), used by Solid::clean to populate
 		// `Solid::history` and remap the colormap when color is enabled.
 		fn builder_clean(shape: &TopoDS_Shape, out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
+		fn builder_clean_preserving_edges(shape: &TopoDS_Shape, keep_edge_indices: &[u32], out_history: &mut Vec<u64>, out_topology_history: &mut HistoryData) -> UniquePtr<TopoDS_Shape>;
 
 		// shell/fillet/chamfer fill `out_history` with flat [post_id, src_id]
 		// pairs (same layout as builder_cells) → Solid::history + colormap remap.

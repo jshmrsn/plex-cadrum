@@ -519,6 +519,36 @@ impl Solid {
 		&self.topology_history
 	}
 
+	/// Unifies same-domain topology except across the named edge ordinals.
+	pub fn clean_preserving_edges(&self, keep_edge_indices: &[u32]) -> Result<Self, Error> {
+		let edge_count = self.iter_edge().count();
+		if keep_edge_indices.iter().any(|index| *index as usize >= edge_count) {
+			return Err(Error::InvalidEdge("a preserved cleanup edge is outside the source topology".into()));
+		}
+		let mut clean_history = Vec::new();
+		let mut clean_topology_history = empty_ffi_history();
+		let inner = ffi::builder_clean_preserving_edges(&self.inner, keep_edge_indices, &mut clean_history, &mut clean_topology_history);
+		self.finish_clean(inner, clean_history, clean_topology_history)
+	}
+
+	fn finish_clean(&self, inner: cxx::UniquePtr<ffi::TopoDS_Shape>, clean_history: Vec<u64>, clean_topology_history: ffi::HistoryData) -> Result<Self, Error> {
+		if inner.is_null() {
+			return Err(Error::CleanFailed);
+		}
+		let clean_topology_history = decode_topology_history(clean_topology_history)?;
+		#[cfg(feature = "color")]
+		let colormap = self.remap_colormap(&inner, &clean_history);
+		let history = if self.history.is_empty() { clean_history } else { compose_face_history(&self.history, &clean_history) };
+		let topology_history = if self.topology_history.is_empty() { clean_topology_history } else { self.topology_history.then(&clean_topology_history) };
+		Ok(Solid::new(
+			inner,
+			#[cfg(feature = "color")]
+			colormap,
+			history,
+		)
+		.with_topology_history(topology_history))
+	}
+
 	/// Rebase this operation's history through a source-preparation operation.
 	pub fn compose_source_history(mut self, source_history: &TopologyHistory) -> Self {
 		self.topology_history = source_history.then(&self.topology_history);
@@ -1497,21 +1527,7 @@ impl SolidStruct for Solid {
 		let mut clean_history: Vec<u64> = Default::default();
 		let mut clean_topology_history = empty_ffi_history();
 		let inner = ffi::builder_clean(&self.inner, &mut clean_history, &mut clean_topology_history);
-		if inner.is_null() {
-			return Err(Error::CleanFailed);
-		}
-		let clean_topology_history = decode_topology_history(clean_topology_history)?;
-		#[cfg(feature = "color")]
-		let colormap = self.remap_colormap(&inner, &clean_history);
-		let history = if self.history.is_empty() { clean_history } else { compose_face_history(&self.history, &clean_history) };
-		let topology_history = if self.topology_history.is_empty() { clean_topology_history } else { self.topology_history.then(&clean_topology_history) };
-		Ok(Solid::new(
-			inner,
-			#[cfg(feature = "color")]
-			colormap,
-			history,
-		)
-		.with_topology_history(topology_history))
+		self.finish_clean(inner, clean_history, clean_topology_history)
 	}
 
 	// ==================== Boolean primitive ====================

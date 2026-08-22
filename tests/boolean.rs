@@ -65,6 +65,26 @@ fn test_union_olympic_rings_out_of_order() {
 	assert!((out_of_order.volume() - in_order.volume()).abs() < 1e-6, "order-independent: {} vs {}", out_of_order.volume(), in_order.volume());
 }
 
+#[test]
+fn same_domain_cleanup_can_preserve_an_authored_section_loop() {
+	let first = cube(1.0, 1.0, 1.0, 0.0, 0.0, 0.0);
+	let second = cube(1.0, 1.0, 1.0, 1.0, 0.0, 0.0);
+	let sectioned = (&first + &second).build().expect("join adjacent sections");
+	let topology = sectioned.topology_snapshot_with_options(TopologyQueryOptions::MEASUREMENT).expect("query section topology");
+	let section_edges = (0..topology.edge_ids().len() as u32).filter(|edge| topology.edge_facts(*edge).and_then(|facts| facts.midpoint).is_some_and(|point| (point[0] - 1.0).abs() < 1.0e-8)).collect::<Vec<_>>();
+
+	assert_eq!(section_edges.len(), 4);
+	let preserved = sectioned.clean_preserving_edges(&section_edges).expect("clean incidental splits");
+	let preserved_topology = preserved.topology_snapshot().expect("query preserved topology");
+	assert_eq!(preserved_topology.face_ids().len(), 10);
+	assert_eq!(preserved_topology.edge_ids().len(), 20);
+
+	let unified = sectioned.clean().expect("clean every same-domain split");
+	let unified_topology = unified.topology_snapshot().expect("query unified topology");
+	assert_eq!(unified_topology.face_ids().len(), 6);
+	assert_eq!(unified_topology.edge_ids().len(), 12);
+}
+
 // ==================== intersect (`*` / reduce) ====================
 
 #[test]

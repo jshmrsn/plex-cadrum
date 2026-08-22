@@ -1163,14 +1163,21 @@ std::unique_ptr<TopoDS_Shape> builder_cells(
 // flat [new_id, old_id, ...] pairs covering every old face that survived
 // (either unchanged, or merged into a result face); identical layout to
 // `builder_boolean`'s history.
-std::unique_ptr<TopoDS_Shape> builder_clean(
+static std::unique_ptr<TopoDS_Shape> builder_clean_impl(
     const TopoDS_Shape& shape,
+    const std::vector<uint32_t>& keep_edge_indices,
     rust::Vec<uint64_t>& out_history,
     HistoryData& out_topology_history)
 {
     try {
         ShapeUpgrade_UnifySameDomain unifier(shape, true, true, true);
         unifier.AllowInternalEdges(false);
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+        TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+        for (uint32_t edge_index : keep_edge_indices) {
+            if (edge_index >= static_cast<uint32_t>(edges.Extent())) return nullptr;
+            unifier.KeepShape(edges(static_cast<int>(edge_index + 1)));
+        }
         unifier.Build();
 
         auto result = std::make_unique<TopoDS_Shape>(unifier.Shape());
@@ -1243,9 +1250,28 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
         finish_topology_history(result_maps, out_topology_history);
         return result;
     } catch (const Standard_Failure& failure) {
-        record_standard_failure(__func__, "native", 7, failure);
+        record_standard_failure("builder_clean", "native", 7, failure);
         return nullptr;
     }
+}
+
+std::unique_ptr<TopoDS_Shape> builder_clean(
+    const TopoDS_Shape& shape,
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
+{
+    return builder_clean_impl(shape, {}, out_history, out_topology_history);
+}
+
+std::unique_ptr<TopoDS_Shape> builder_clean_preserving_edges(
+    const TopoDS_Shape& shape,
+    rust::Slice<const uint32_t> keep_edge_indices,
+    rust::Vec<uint64_t>& out_history,
+    HistoryData& out_topology_history)
+{
+    return builder_clean_impl(shape,
+        std::vector<uint32_t>(keep_edge_indices.begin(), keep_edge_indices.end()),
+        out_history, out_topology_history);
 }
 
 // ==================== Transforms (solid → solid, no history) ====================
@@ -3781,4 +3807,3 @@ bool write_step_color_stream(
 } // namespace cadrum
 
 #endif // FEATURE_COLOR
-

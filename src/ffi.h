@@ -113,6 +113,12 @@ std::unique_ptr<TopoDS_Shape> builder_clean(
 	rust::Vec<uint64_t>& out_history,
 	HistoryData& out_topology_history);
 
+std::unique_ptr<TopoDS_Shape> builder_clean_preserving_edges(
+	const TopoDS_Shape& shape,
+	rust::Slice<const uint32_t> keep_edge_indices,
+	rust::Vec<uint64_t>& out_history,
+	HistoryData& out_topology_history);
+
 // Shell (hollow) the solid by removing `open_faces` and offsetting the
 // remaining faces by `thickness` via BRepOffsetAPI_MakeThickSolid. Negative
 // thickness hollows inward, positive thickens outward. Returns nullptr on
